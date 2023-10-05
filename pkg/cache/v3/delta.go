@@ -16,6 +16,7 @@ package cache
 
 import (
 	"context"
+	"strings"
 
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/server/stream/v3"
@@ -26,6 +27,53 @@ type resourceContainer struct {
 	resourceMap   map[string]types.Resource
 	versionMap    map[string]string
 	systemVersion string
+}
+
+func contains(s []string, elem string) bool {
+	for _, a := range s {
+		if a == elem {
+			return true
+		}
+	}
+	return false
+}
+
+func combineUnique(str1 []string, str2 []string) []string {
+	res := make([]string, 0)
+	for _, s := range str1 {
+		if !contains(res, s) {
+			res = append(res, s)
+		}
+	}
+
+	for _, s := range str2 {
+		if !contains(res, s) {
+			res = append(res, s)
+		}
+	}
+
+	return res
+}
+
+func containsPrefixedKey(data map[string]string, keyLike string) ([]string, bool) {
+	resNames := make([]string, 0)
+	for key := range data {
+		if strings.Contains(key, keyLike) {
+			resNames = append(resNames, key)
+		}
+	}
+
+	return resNames, len(resNames) > 0
+}
+
+func containsPrefixedKeyResources(data map[string]types.Resource, keyLike string) ([]string, bool) {
+	resNames := make([]string, 0)
+	for key := range data {
+		if strings.Contains(key, keyLike) {
+			resNames = append(resNames, key)
+		}
+	}
+	return resNames, len(resNames) > 0
 }
 
 func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.StreamState, resources resourceContainer) *RawDeltaResponse {
@@ -64,15 +112,35 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 		// state.GetResourceVersions() may include resources no longer subscribed
 		// In the current code this gets silently cleaned when updating the version map
 		for name := range state.GetSubscribedResourceNames() {
-			prevVersion, found := state.GetResourceVersions()[name]
-			if r, ok := resources.resourceMap[name]; ok {
-				nextVersion := resources.versionMap[name]
-				if prevVersion != nextVersion {
-					filtered = append(filtered, r)
+			dirResourceName := name
+			if strings.Contains(dirResourceName, "*") {
+				prevVersions, _ := containsPrefixedKey(state.GetResourceVersions(), dirResourceName)
+				currVersions, _ := containsPrefixedKeyResources(resources.resourceMap, dirResourceName)
+				combinedVersions := combineUnique(prevVersions, currVersions)
+
+				for _, versionName := range combinedVersions {
+					prevVersion, found := state.GetResourceVersions()[versionName]
+					if r, ok := resources.resourceMap[versionName]; ok {
+						nextVersion := resources.versionMap[versionName]
+						if prevVersion != nextVersion {
+							filtered = append(filtered, r)
+						}
+						nextVersionMap[versionName] = nextVersion
+					} else if found {
+						toRemove = append(toRemove, versionName)
+					}
 				}
-				nextVersionMap[name] = nextVersion
-			} else if found {
-				toRemove = append(toRemove, name)
+			} else {
+				prevVersion, found := state.GetResourceVersions()[name]
+				if r, ok := resources.resourceMap[name]; ok {
+					nextVersion := resources.versionMap[name]
+					if prevVersion != nextVersion {
+						filtered = append(filtered, r)
+					}
+					nextVersionMap[name] = nextVersion
+				} else if found {
+					toRemove = append(toRemove, name)
+				}
 			}
 		}
 	}
