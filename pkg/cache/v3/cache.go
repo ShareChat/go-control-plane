@@ -255,7 +255,8 @@ func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscover
 				Version: version,
 			}
 		}
-
+		fmt.Printf("\nAdded/Changed: %v\n", r.Resources)
+		fmt.Printf("\nRemoved: %v\n", r.RemovedResources)
 		marshaledResponse = &discovery.DeltaDiscoveryResponse{
 			Resources:         marshaledResources,
 			RemovedResources:  r.RemovedResources,
