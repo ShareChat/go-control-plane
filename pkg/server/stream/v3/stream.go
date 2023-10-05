@@ -1,6 +1,8 @@
 package stream
 
 import (
+	"strings"
+
 	"google.golang.org/grpc"
 
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
@@ -63,6 +65,28 @@ func (s *StreamState) WatchesResources(resourceNames map[string]struct{}) bool {
 	if s.IsWildcard() {
 		return true
 	}
+	// Find subscribedResourceNames which have wildcards
+	// See if at least one matches with arg resourceNames key
+	wildcardSubscribedResourceNames := make([]string, 0)
+	for subscribedResourceName := range s.subscribedResourceNames {
+		if strings.Contains(subscribedResourceName, "/*") {
+			// Trim
+			cleanedName := strings.TrimSuffix(subscribedResourceName, "/*")
+			wildcardSubscribedResourceNames = append(wildcardSubscribedResourceNames, cleanedName)
+		}
+	}
+
+	if len(wildcardSubscribedResourceNames) > 0 {
+		// TODO(krhitesh7): Possiblity of optimisation
+		for _, wildcardSubscribedResourceName := range wildcardSubscribedResourceNames {
+			for resourceName := range resourceNames {
+				if strings.Contains(resourceName, wildcardSubscribedResourceName) {
+					return true
+				}
+			}
+		}
+	}
+
 	for resourceName := range resourceNames {
 		if _, ok := s.subscribedResourceNames[resourceName]; ok {
 			return true
