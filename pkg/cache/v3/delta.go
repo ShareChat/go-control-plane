@@ -114,6 +114,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 		for name := range state.GetSubscribedResourceNames() {
 			dirResourceName := name
 			if strings.Contains(dirResourceName, "*") {
+				dirResourceName = strings.Split(dirResourceName, "/*")[0]
 				prevVersions, _ := containsPrefixedKey(state.GetResourceVersions(), dirResourceName)
 				currVersions, _ := containsPrefixedKeyResources(resources.resourceMap, dirResourceName)
 				combinedVersions := combineUnique(prevVersions, currVersions)
