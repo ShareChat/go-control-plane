@@ -114,7 +114,7 @@ func GetResourceName(res types.Resource) string {
 	case types.ResourceWithName:
 		return v.GetName()
 	// TODO(krhitesh7): Test
-	case *endpoint.LocalityLbEndpoints:
+	case *endpoint.LbEndpoint:
 		filterMetadata := v.GetMetadata().GetFilterMetadata()
 		if xdstpEndpoint, ok := filterMetadata["xdstp.endpoint"]; ok {
 			if uri, ok := xdstpEndpoint.Fields["uri"]; ok {
