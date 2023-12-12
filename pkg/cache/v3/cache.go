@@ -234,10 +234,13 @@ func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscover
 	marshaledResponse := r.marshaledResponse.Load()
 
 	if marshaledResponse == nil {
-		marshaledResources := make([]*discovery.Resource, len(r.Resources))
+		marshaledResources := make([]*discovery.Resource, 0)
 
-		for i, resource := range r.Resources {
+		for _, resource := range r.Resources {
 			name := GetResourceName(resource)
+			if name == "" {
+				continue
+			}
 			marshaledResource, err := MarshalResource(resource)
 			if err != nil {
 				return nil, err
@@ -246,17 +249,16 @@ func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscover
 			if version == "" {
 				return nil, errors.New("failed to create a resource hash")
 			}
-			marshaledResources[i] = &discovery.Resource{
+			marshaledResources = append(marshaledResources, &discovery.Resource{
 				Name: name,
 				Resource: &anypb.Any{
 					TypeUrl: r.DeltaRequest.TypeUrl,
 					Value:   marshaledResource,
 				},
 				Version: version,
-			}
+			})
 		}
-		fmt.Printf("\nAdded/Changed: %v\n", r.Resources)
-		fmt.Printf("\nRemoved: %v\n", r.RemovedResources)
+
 		marshaledResponse = &discovery.DeltaDiscoveryResponse{
 			Resources:         marshaledResources,
 			RemovedResources:  r.RemovedResources,

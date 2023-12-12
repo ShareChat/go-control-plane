@@ -490,12 +490,13 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 		if err != nil {
 			cache.log.Errorf("failed to compute version for snapshot resources inline: %s", err)
 		}
-		response, err := cache.respondDelta(context.Background(), snapshot, request, value, state)
+		// We don't need to respond. We're handling this in a better way in ads.
+		// response, err := cache.respondDelta(context.Background(), snapshot, request, value, state)
 		if err != nil {
 			cache.log.Errorf("failed to respond with delta response: %s", err)
 		}
 
-		delayedResponse = response == nil
+		delayedResponse = true // response == nil
 	}
 
 	if delayedResponse {
