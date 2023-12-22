@@ -145,8 +145,8 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 		}
 	}
 
-	filteredResources := make([]types.Resource, len(filtered))
-	filteredResourceNames := make([]string, len(filtered))
+	filteredResources := make([]types.Resource, 0)
+	filteredResourceNames := make([]string, 0)
 	for name, r := range filtered {
 		filteredResources = append(filteredResources, r)
 		filteredResourceNames = append(filteredResourceNames, name)
