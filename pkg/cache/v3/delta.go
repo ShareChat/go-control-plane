@@ -16,6 +16,8 @@ package cache
 
 import (
 	"context"
+	"fmt"
+	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"strings"
 
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
@@ -83,6 +85,9 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 	var toRemove []string
 
 	// If we are handling a wildcard request, we want to respond with all resources
+	if req.TypeUrl == resource.ClusterType {
+		fmt.Println("are we handling wildcard? ", state.IsWildcard())
+	}
 	switch {
 	case state.IsWildcard():
 		filtered = make(map[string]types.Resource)
@@ -113,7 +118,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 		for name := range state.GetSubscribedResourceNames() {
 			dirResourceName := name
 			if strings.Contains(dirResourceName, "*") {
-				dirResourceName = strings.Split(dirResourceName, "/*")[0]
+				dirResourceName = strings.Split(dirResourceName, "*")[0]
 				prevVersions, _ := containsPrefixedKey(state.GetResourceVersions(), dirResourceName)
 				currVersions, _ := containsPrefixedKeyResources(resources.resourceMap, dirResourceName)
 				combinedVersions := combineUnique(prevVersions, currVersions)
