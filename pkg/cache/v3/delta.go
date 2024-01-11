@@ -86,7 +86,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 
 	// If we are handling a wildcard request, we want to respond with all resources
 	if req.TypeUrl == resource.ClusterType {
-		fmt.Println("are we handling wildcard? ", state.IsWildcard())
+		fmt.Println("For type %s, are we handling wildcard subscriptions?", req.TypeUrl, state.IsWildcard())
 	}
 	switch {
 	case state.IsWildcard():
@@ -98,6 +98,9 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 			version := resources.versionMap[name]
 			nextVersionMap[name] = version
 			prevVersion, found := state.GetResourceVersions()[name]
+			if req.TypeUrl == resource.ClusterType {
+				fmt.Printf("\nName=%s, Old=%s, New=%s\n", name, prevVersion, version)
+			}
 			if !found || (prevVersion != version) {
 				filtered[name] = r
 			}
