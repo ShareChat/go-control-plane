@@ -1,5 +1,8 @@
 name: CI Build and Test
 
+permissions:
+  contents: read
+
 on:
   pull_request:
   push:
@@ -10,6 +13,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@9bb56186c3b09b4f86b1c65136769dd318469633  # v4.1.2
       - name: build and test
         run: make docker_tests
