@@ -13,6 +13,7 @@ import (
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+	"github.com/envoyproxy/go-control-plane/pkg/server/config"
 	"github.com/envoyproxy/go-control-plane/pkg/server/stream/v3"
 )
 
@@ -30,7 +31,7 @@ type Callbacks interface {
 	// OnStreamDeltaRequest is called once a request is received on a stream.
 	// Returning an error will end processing and close the stream. OnStreamClosed will still be called.
 	OnStreamDeltaRequest(int64, *discovery.DeltaDiscoveryRequest) error
-	// OnStreamDelatResponse is called immediately prior to sending a response on a stream.
+	// OnStreamDeltaResponse is called immediately prior to sending a response on a stream.
 	OnStreamDeltaResponse(int64, *discovery.DeltaDiscoveryRequest, *discovery.DeltaDiscoveryResponse)
 }
 
@@ -43,15 +44,25 @@ type server struct {
 	// total stream count for counting bi-di streams
 	streamCount int64
 	ctx         context.Context
+
+	// Local configuration flags for individual xDS implementations.
+	opts config.Opts
 }
 
 // NewServer creates a delta xDS specific server which utilizes a ConfigWatcher and delta Callbacks.
-func NewServer(ctx context.Context, config cache.ConfigWatcher, callbacks Callbacks) Server {
-	return &server{
+func NewServer(ctx context.Context, config cache.ConfigWatcher, callbacks Callbacks, opts ...config.XDSOption) Server {
+	s := &server{
 		cache:     config,
 		callbacks: callbacks,
 		ctx:       ctx,
 	}
+
+	// Parse through our options
+	for _, opt := range opts {
+		opt(&s.opts)
+	}
+
+	return s
 }
 
 func (s *server) processDelta(str stream.DeltaStream, reqCh <-chan *discovery.DeltaDiscoveryRequest, defaultTypeURL string) error {
@@ -119,26 +130,8 @@ func (s *server) processDelta(str stream.DeltaStream, reqCh <-chan *discovery.De
 
 			watch := watches.deltaWatches[typ]
 			watch.nonce = nonce
-			// As per XDS protocol, for the non wildcard resources, management server should only respond to the resources
-			// requested by the client. Since we were replacing (instead of updating) the complete state resource version
-			// map after responding to the client, it was overriding/removing the resources subscribed by the client intermittently.
-			// As a result, the update of the such resources was never sent to the client.
-			// In order to address the issue, started updating the resources hash in the existing map instead of replacing
-			// the completed map.
-			// In case of wildcard resources, client never subscribes for the resources, replacing the state resource version based
-			// on the response by the management server is not an issue. Hence, the fix is only applicable for the non wildcard resources.
-			if !watch.state.IsWildcard() {
-				for k, hash := range resp.GetNextVersionMap() {
-					if currHash, found := watch.state.GetResourceVersions()[k]; found {
-						if currHash != hash {
-							watch.state.GetResourceVersions()[k] = hash
-						}
-					}
-				}
-			} else {
-				watch.state.SetResourceVersions(resp.GetNextVersionMap())
-			}
 
+			watch.state.SetResourceVersions(resp.GetNextVersionMap())
 			watches.deltaWatches[typ] = watch
 		case req, more := <-reqCh:
 			// input stream ended or errored out
