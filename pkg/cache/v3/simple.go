@@ -16,7 +16,6 @@ package cache
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"strconv"
@@ -358,7 +357,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		}
 	}
 
-	return errors.New("[UpsertResources] snapshot cache not found")
+	return nil
 }
 
 func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, typ string, resourcesDeleted map[string]types.Resource) error {
@@ -395,7 +394,7 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 		}
 	}
 
-	return errors.New("[DeleteResources] snapshot cache not found")
+	return nil
 }
 
 // SetSnapshot - updates a snapshot for a node.
