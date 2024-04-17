@@ -91,6 +91,10 @@ type SnapshotCache interface {
 
 	// GetStatusKeys retrieves node IDs for all statuses.
 	GetStatusKeys() []string
+
+	UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]types.Resource) error
+
+	DeleteResources(ctx context.Context, node string, typ string, resourcesDeleted map[string]types.Resource) error
 }
 
 type snapshotCache struct {
