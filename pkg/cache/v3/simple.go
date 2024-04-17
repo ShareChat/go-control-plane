@@ -239,16 +239,17 @@ func (cache *snapshotCache) ParseSystemVersionInfo(version string) int64 {
 }
 
 func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string, batchResourcesUpserted map[string]map[string]types.Resource) error {
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-
 	var wg sync.WaitGroup
 	for node, resourcesUpserted := range batchResourcesUpserted {
 		wg.Add(1)
 
 		go func(node string, resourcesUpserted map[string]types.Resource) {
 			defer wg.Done()
+
+			cache.mu.Lock()
 			if snapshot, ok := cache.snapshots[node]; ok {
+				defer cache.mu.Unlock()
+
 				// Add new/updated resources to the Resources map
 				index := GetResponseType(typ)
 				currentResources := snapshot.(*Snapshot).Resources[index]
@@ -278,6 +279,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 					}
 				}
 			} else {
+				cache.mu.Unlock()
 				resources := make(map[resource.Type][]types.Resource)
 				resources[typ] = make([]types.Resource, 0)
 				for _, r := range resourcesUpserted {
@@ -302,9 +304,8 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 
 func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]types.Resource) error {
 	cache.mu.Lock()
-	defer cache.mu.Unlock()
-
 	if snapshot, ok := cache.snapshots[node]; ok {
+		defer cache.mu.Unlock()
 		// Add new/updated resources to the Resources map
 		index := GetResponseType(typ)
 		currentResources := snapshot.(*Snapshot).Resources[index]
@@ -331,6 +332,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 			return cache.respondDeltaWatches(ctx, info, snapshot)
 		}
 	} else {
+		cache.mu.Unlock()
 		resources := make(map[resource.Type][]types.Resource)
 		resources[typ] = make([]types.Resource, 0)
 		for _, r := range resourcesUpserted {
