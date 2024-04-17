@@ -255,6 +255,11 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 				currentResources := snapshot.(*Snapshot).Resources[index]
 				currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
 
+				if currentResources.Items == nil {
+					// Fresh resources
+					currentResources.Items = make(map[string]types.ResourceWithTTL)
+				}
+
 				for name, r := range resourcesUpserted {
 					currentResources.Items[name] = types.ResourceWithTTL{Resource: r}
 				}
@@ -310,6 +315,11 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		index := GetResponseType(typ)
 		currentResources := snapshot.(*Snapshot).Resources[index]
 		currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+
+		if currentResources.Items == nil {
+			// Fresh resources
+			currentResources.Items = make(map[string]types.ResourceWithTTL)
+		}
 
 		for name, r := range resourcesUpserted {
 			currentResources.Items[name] = types.ResourceWithTTL{Resource: r}
