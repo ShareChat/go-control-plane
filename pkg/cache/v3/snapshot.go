@@ -172,9 +172,10 @@ func (s *Snapshot) ConstructVersionMap() error {
 	}
 
 	// The snapshot resources never change, so no need to ever rebuild.
-	if s.VersionMap != nil {
-		return nil
-	}
+	// With more efficient, updates to snapshot, it may change.
+	//if s.VersionMap != nil {
+	//	return nil
+	//}
 
 	s.VersionMap = make(map[string]map[string]string)
 
