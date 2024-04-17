@@ -16,7 +16,10 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -220,7 +223,102 @@ func (cache *snapshotCache) sendHeartbeats(ctx context.Context, node string) {
 	}
 }
 
-// SetSnapshotCache updates a snapshot for a node.
+func (cache *snapshotCache) ParseSystemVersionInfo(version string) int64 {
+	parsed, err := strconv.ParseInt(version, 10, 64)
+	if err != nil {
+		return 0
+	}
+
+	return parsed
+}
+
+func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]types.Resource) error {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	if snapshot, ok := cache.snapshots[node]; !ok {
+		// Add new/updated resources to the Resources map
+		index := GetResponseType(typ)
+		currentResources := snapshot.(*Snapshot).Resources[index]
+		currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+
+		for name, r := range resourcesUpserted {
+			currentResources.Items[name] = types.ResourceWithTTL{Resource: r}
+		}
+
+		// Change in version
+		currentVersion++
+		currentResources.Version = fmt.Sprintf("%d", currentVersion)
+
+		// Update
+		snapshot.(*Snapshot).Resources[index] = currentResources
+		cache.snapshots[node] = snapshot
+
+		// Respond deltas
+		if info, ok := cache.status[node]; ok {
+			info.mu.Lock()
+			defer info.mu.Unlock()
+
+			// Respond to delta watches for the node.
+			return cache.respondDeltaWatches(ctx, info, snapshot)
+		}
+	} else {
+		resources := make(map[resource.Type][]types.Resource)
+		resources[typ] = make([]types.Resource, 0)
+		for _, r := range resourcesUpserted {
+			resources[typ] = append(resources[typ], r)
+		}
+		snapshot, err := NewSnapshot("0", resources)
+		if err != nil {
+			return err
+		}
+		err = cache.SetSnapshot(ctx, node, snapshot)
+		if err != nil {
+			return err
+		}
+	}
+
+	return errors.New("[UpsertResources] snapshot cache not found")
+}
+
+func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, typ string, resourcesDeleted map[string]types.Resource) error {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	if snapshot, ok := cache.snapshots[node]; !ok {
+		// Add new/updated resources to the Resources map
+		index := GetResponseType(typ)
+		currentResources := snapshot.(*Snapshot).Resources[index]
+		currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+
+		for name, _ := range resourcesDeleted {
+			if _, found := currentResources.Items[name]; found {
+				delete(currentResources.Items, name)
+			}
+		}
+
+		// Change in version
+		currentVersion++
+		currentResources.Version = fmt.Sprintf("%d", currentVersion)
+
+		// Update
+		snapshot.(*Snapshot).Resources[index] = currentResources
+		cache.snapshots[node] = snapshot
+
+		// Respond deltas
+		if info, ok := cache.status[node]; ok {
+			info.mu.Lock()
+			defer info.mu.Unlock()
+
+			// Respond to delta watches for the node.
+			return cache.respondDeltaWatches(ctx, info, snapshot)
+		}
+	}
+
+	return errors.New("[DeleteResources] snapshot cache not found")
+}
+
+// SetSnapshot - updates a snapshot for a node.
 func (cache *snapshotCache) SetSnapshot(ctx context.Context, node string, snapshot ResourceSnapshot) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
