@@ -248,7 +248,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 
 		go func(node string, resourcesUpserted map[string]types.Resource) {
 			defer wg.Done()
-			if snapshot, ok := cache.snapshots[node]; !ok {
+			if snapshot, ok := cache.snapshots[node]; ok {
 				// Add new/updated resources to the Resources map
 				index := GetResponseType(typ)
 				currentResources := snapshot.(*Snapshot).Resources[index]
@@ -304,7 +304,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	if snapshot, ok := cache.snapshots[node]; !ok {
+	if snapshot, ok := cache.snapshots[node]; ok {
 		// Add new/updated resources to the Resources map
 		index := GetResponseType(typ)
 		currentResources := snapshot.(*Snapshot).Resources[index]
@@ -353,7 +353,7 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	if snapshot, ok := cache.snapshots[node]; !ok {
+	if snapshot, ok := cache.snapshots[node]; ok {
 		// Add new/updated resources to the Resources map
 		index := GetResponseType(typ)
 		currentResources := snapshot.(*Snapshot).Resources[index]
