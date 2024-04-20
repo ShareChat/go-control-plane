@@ -362,20 +362,22 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 	return nil
 }
 
-func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error {
+func (cache *snapshotCache) DeleteResources(ctx context.Context, _ string, typ string, resourcesToDeleted []string) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+
+	fmt.Printf("Got DeleteResources resource %v", resourcesToDeleted)
 
 	resourceToDelete := resourcesToDeleted[0]
 	resourceToDeleteParts := strings.Split(resourcesToDeleted[0], "/")
 	serviceName := resourceToDeleteParts[4]
 	zone := resourceToDeleteParts[5]
 	portString := strings.Split(resourcesToDeleted[0], "_")[1]
-	claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", resource.EndpointType, serviceName, portString)
+	claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
 
 	cache.log.Infof("DeleteResources claName=%s", claName)
 
-	for _, snapshot := range cache.snapshots {
+	for node_, snapshot := range cache.snapshots {
 		didModify := false
 		currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
 		if rsc, found := currentResources.Items[claName]; found {
@@ -402,19 +404,22 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 		}
 
 		if didModify {
-			// Respond deltas
-			if info, ok := cache.status[node]; ok {
-				info.mu.Lock()
-				_ = cache.respondDeltaWatches(ctx, info, snapshot)
-				info.mu.Unlock()
-			}
-
+			// Update
 			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
 			currentVersion++
 			currentResources.Version = fmt.Sprintf("%d", currentVersion)
 
 			snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
-			cache.snapshots[node] = snapshot
+			cache.snapshots[node_] = snapshot
+
+			// Respond deltas
+			if info, ok := cache.status[node_]; ok {
+				fmt.Println("Now responding deltas!")
+
+				info.mu.Lock()
+				_ = cache.respondDeltaWatches(ctx, info, snapshot)
+				info.mu.Unlock()
+			}
 		}
 	}
 
