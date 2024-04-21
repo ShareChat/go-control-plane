@@ -17,6 +17,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"strconv"
@@ -388,8 +389,11 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, _ string, typ s
 					for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
 						if resourceToDelete == GetResourceName(lbEndpoint) {
 							didModify = true
-							cache.log.Infof("Removed endpoint %s", resourceToDelete)
-							continue
+							cache.log.Infof("Drain and remove endpoint %s", resourceToDelete)
+
+							// Set to UNHEALTHY/DRAINING and let Envoy gracefully remove them.
+							lbEndpoint.HealthStatus = core.HealthStatus_DRAINING
+							// continue
 						}
 						newEndpoints = append(newEndpoints, lbEndpoint)
 					}
