@@ -99,6 +99,8 @@ type SnapshotCache interface {
 	BatchUpsertResources(ctx context.Context, typ string, resourcesUpserted map[string]map[string]types.Resource) error
 
 	DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error
+
+	DrainResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error
 }
 
 type snapshotCache struct {
@@ -364,6 +366,65 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 }
 
 func (cache *snapshotCache) DeleteResources(ctx context.Context, _ string, typ string, resourcesToDeleted []string) error {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	fmt.Printf("Got DeleteResources resource %v", resourcesToDeleted)
+
+	resourceToDelete := resourcesToDeleted[0]
+	resourceToDeleteParts := strings.Split(resourcesToDeleted[0], "/")
+	serviceName := resourceToDeleteParts[4]
+	zone := resourceToDeleteParts[5]
+	portString := strings.Split(resourcesToDeleted[0], "_")[1]
+	claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
+
+	cache.log.Infof("DeleteResources claName=%s", claName)
+
+	for node_, snapshot := range cache.snapshots {
+		currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
+		if rsc, found := currentResources.Items[claName]; found {
+			cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
+			for i, _ := range cla.Endpoints {
+				if cla.Endpoints[i].Locality.Zone == zone {
+					newEndpoints := make([]*endpoint.LbEndpoint, 0)
+					for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
+						if resourceToDelete == GetResourceName(lbEndpoint) {
+							continue
+						}
+						newEndpoints = append(newEndpoints, lbEndpoint)
+					}
+
+					cla.Endpoints[i].LbEndpoints = newEndpoints
+				}
+			}
+
+			currentResources.Items[claName] = types.ResourceWithTTL{
+				Resource: cla,
+			}
+		}
+
+		// Update
+		currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+		currentVersion++
+		currentResources.Version = fmt.Sprintf("%d", currentVersion)
+
+		snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
+		cache.snapshots[node_] = snapshot
+
+		// Respond deltas
+		if info, ok := cache.status[node_]; ok {
+			fmt.Println("Now responding deltas!")
+
+			info.mu.Lock()
+			_ = cache.respondDeltaWatches(ctx, info, snapshot)
+			info.mu.Unlock()
+		}
+	}
+
+	return nil
+}
+
+func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ string, resourcesToDeleted []string) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
