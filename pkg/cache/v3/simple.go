@@ -369,7 +369,7 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, _ string, typ s
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	fmt.Printf("Got DeleteResources resource %v", resourcesToDeleted)
+	fmt.Printf("local DeleteResources %v", resourcesToDeleted)
 
 	resourceToDelete := resourcesToDeleted[0]
 	resourceToDeleteParts := strings.Split(resourcesToDeleted[0], "/")
@@ -377,8 +377,6 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, _ string, typ s
 	zone := resourceToDeleteParts[5]
 	portString := strings.Split(resourcesToDeleted[0], "_")[1]
 	claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
-
-	cache.log.Infof("DeleteResources claName=%s", claName)
 
 	for node_, snapshot := range cache.snapshots {
 		currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
@@ -413,8 +411,6 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, _ string, typ s
 
 		// Respond deltas
 		if info, ok := cache.status[node_]; ok {
-			fmt.Println("Now responding deltas!")
-
 			info.mu.Lock()
 			_ = cache.respondDeltaWatches(ctx, info, snapshot)
 			info.mu.Unlock()
@@ -424,17 +420,17 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, _ string, typ s
 	return nil
 }
 
-func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ string, resourcesToDeleted []string) error {
+func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ string, resourcesToDrain []string) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	fmt.Printf("Got DeleteResources resource %v", resourcesToDeleted)
+	fmt.Printf("local DrainResources resource %v", resourcesToDrain)
 
-	resourceToDelete := resourcesToDeleted[0]
-	resourceToDeleteParts := strings.Split(resourcesToDeleted[0], "/")
+	resourceToDelete := resourcesToDrain[0]
+	resourceToDeleteParts := strings.Split(resourcesToDrain[0], "/")
 	serviceName := resourceToDeleteParts[4]
 	zone := resourceToDeleteParts[5]
-	portString := strings.Split(resourcesToDeleted[0], "_")[1]
+	portString := strings.Split(resourcesToDrain[0], "_")[1]
 	claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
 
 	cache.log.Infof("DeleteResources claName=%s", claName)
@@ -479,8 +475,6 @@ func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ st
 
 			// Respond deltas
 			if info, ok := cache.status[node_]; ok {
-				fmt.Println("Now responding deltas!")
-
 				info.mu.Lock()
 				_ = cache.respondDeltaWatches(ctx, info, snapshot)
 				info.mu.Unlock()
