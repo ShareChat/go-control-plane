@@ -18,7 +18,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-
 	"google.golang.org/protobuf/proto"
 
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -111,6 +110,15 @@ func GetResourceNames(resources []types.Resource) []string {
 	out := make([]string, len(resources))
 	for i, r := range resources {
 		out[i] = GetResourceName(r)
+	}
+	return out
+}
+
+// GetResourceWithTTLNames returns the resource names for a list of valid xDS response types.
+func GetResourceWithTTLNames(resources []types.ResourceWithTTL) []string {
+	out := make([]string, len(resources))
+	for i, r := range resources {
+		out[i] = GetResourceName(r.Resource)
 	}
 	return out
 }

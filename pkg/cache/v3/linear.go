@@ -177,8 +177,18 @@ func (cache *LinearCache) notifyAll(modified map[string]struct{}) {
 }
 
 func (cache *LinearCache) respondDelta(request *DeltaRequest, value chan DeltaResponse, state stream.StreamState) *RawDeltaResponse {
+	// We converted types.Resource to types.ResourceWithTTL in Snapshot cache.
+	// In order to avoid affects in any other types of caches, we loop and  convert
+	// back types.Resource to types.ResourceWithTTL
+	resources := make(map[string]types.ResourceWithTTL)
+	for name, resource := range cache.resources {
+		resources[name] = types.ResourceWithTTL{
+			Resource: resource,
+		}
+	}
+
 	resp := createDeltaResponse(context.Background(), request, state, resourceContainer{
-		resourceMap:   cache.resources,
+		resourceMap:   resources,
 		versionMap:    cache.versionMap,
 		systemVersion: cache.getVersion(),
 	})
@@ -187,7 +197,7 @@ func (cache *LinearCache) respondDelta(request *DeltaRequest, value chan DeltaRe
 	if len(resp.Resources) > 0 || len(resp.RemovedResources) > 0 {
 		if cache.log != nil {
 			cache.log.Debugf("[linear cache] node: %s, sending delta response for typeURL %s with resources: %v removed resources: %v with wildcard: %t",
-				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
+				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
 		}
 		value <- resp
 		return resp

@@ -94,9 +94,9 @@ type SnapshotCache interface {
 	// GetStatusKeys retrieves node IDs for all statuses.
 	GetStatusKeys() []string
 
-	UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]types.Resource) error
+	UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL) error
 
-	BatchUpsertResources(ctx context.Context, typ string, resourcesUpserted map[string]map[string]types.Resource) error
+	BatchUpsertResources(ctx context.Context, typ string, resourcesUpserted map[string]map[string]*types.ResourceWithTTL) error
 
 	DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error
 
@@ -242,12 +242,12 @@ func (cache *snapshotCache) ParseSystemVersionInfo(version string) int64 {
 	return parsed
 }
 
-func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string, batchResourcesUpserted map[string]map[string]types.Resource) error {
+func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string, batchResourcesUpserted map[string]map[string]*types.ResourceWithTTL) error {
 	var wg sync.WaitGroup
 	for node, resourcesUpserted := range batchResourcesUpserted {
 		wg.Add(1)
 
-		go func(node string, resourcesUpserted map[string]types.Resource) {
+		go func(node string, resourcesUpserted map[string]*types.ResourceWithTTL) {
 			defer wg.Done()
 
 			cache.mu.Lock()
@@ -265,7 +265,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 				}
 
 				for name, r := range resourcesUpserted {
-					currentResources.Items[name] = types.ResourceWithTTL{Resource: r}
+					currentResources.Items[name] = *r
 				}
 
 				// Change in version
@@ -289,12 +289,12 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 				}
 			} else {
 				cache.mu.Unlock()
-				resources := make(map[resource.Type][]types.Resource)
-				resources[typ] = make([]types.Resource, 0)
+				resources := make(map[resource.Type][]types.ResourceWithTTL)
+				resources[typ] = make([]types.ResourceWithTTL, 0)
 				for _, r := range resourcesUpserted {
-					resources[typ] = append(resources[typ], r)
+					resources[typ] = append(resources[typ], *r)
 				}
-				s, err := NewSnapshot("0", resources)
+				s, err := NewSnapshotWithTTLs("0", resources)
 				if err != nil {
 					return
 				}
@@ -311,7 +311,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 	return nil
 }
 
-func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]types.Resource) error {
+func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL) error {
 	cache.mu.Lock()
 	if snapshot, ok := cache.snapshots[node]; ok {
 		defer cache.mu.Unlock()
@@ -326,7 +326,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		}
 
 		for name, r := range resourcesUpserted {
-			currentResources.Items[name] = types.ResourceWithTTL{Resource: r}
+			currentResources.Items[name] = *r
 		}
 
 		// Change in version
@@ -347,12 +347,12 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		}
 	} else {
 		cache.mu.Unlock()
-		resources := make(map[resource.Type][]types.Resource)
-		resources[typ] = make([]types.Resource, 0)
+		resources := make(map[resource.Type][]types.ResourceWithTTL)
+		resources[typ] = make([]types.ResourceWithTTL, 0)
 		for _, r := range resourcesUpserted {
-			resources[typ] = append(resources[typ], r)
+			resources[typ] = append(resources[typ], *r)
 		}
-		s, err := NewSnapshot("0", resources)
+		s, err := NewSnapshotWithTTLs("0", resources)
 		if err != nil {
 			return err
 		}
@@ -847,7 +847,7 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 // Respond to a delta watch with the provided snapshot value. If the response is nil, there has been no state change.
 func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceSnapshot, request *DeltaRequest, value chan DeltaResponse, state stream.StreamState) (*RawDeltaResponse, error) {
 	resp := createDeltaResponse(ctx, request, state, resourceContainer{
-		resourceMap:   snapshot.GetResources(request.GetTypeUrl()),
+		resourceMap:   snapshot.GetResourcesAndTTL(request.GetTypeUrl()),
 		versionMap:    snapshot.GetVersionMap(request.GetTypeUrl()),
 		systemVersion: snapshot.GetVersion(request.GetTypeUrl()),
 	})
@@ -858,7 +858,7 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 	if len(resp.Resources) > 0 || len(resp.RemovedResources) > 0 || (state.IsWildcard() && state.IsFirst()) {
 		if cache.log != nil {
 			cache.log.Debugf("node: %s, sending delta response for typeURL %s with resources: %v removed resources: %v with wildcard: %t",
-				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
+				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
 		}
 		select {
 		case value <- resp:

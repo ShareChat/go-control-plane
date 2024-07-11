@@ -24,7 +24,7 @@ import (
 
 // groups together resource-related arguments for the createDeltaResponse function
 type resourceContainer struct {
-	resourceMap   map[string]types.Resource
+	resourceMap   map[string]types.ResourceWithTTL
 	versionMap    map[string]string
 	systemVersion string
 }
@@ -66,7 +66,7 @@ func containsPrefixedKey(data map[string]string, keyLike string) ([]string, bool
 	return resNames, len(resNames) > 0
 }
 
-func containsPrefixedKeyResources(data map[string]types.Resource, keyLike string) ([]string, bool) {
+func containsPrefixedKeyResources(data map[string]types.ResourceWithTTL, keyLike string) ([]string, bool) {
 	resNames := make([]string, 0)
 	for key := range data {
 		if strings.Contains(key, keyLike) {
@@ -79,11 +79,11 @@ func containsPrefixedKeyResources(data map[string]types.Resource, keyLike string
 func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.StreamState, resources resourceContainer) *RawDeltaResponse {
 	// variables to build our response with
 	var nextVersionMap map[string]string
-	var filtered map[string]types.Resource
+	var filtered map[string]types.ResourceWithTTL
 	var toRemove []string
 	switch {
 	case state.IsWildcard():
-		filtered = make(map[string]types.Resource)
+		filtered = make(map[string]types.ResourceWithTTL)
 		nextVersionMap = make(map[string]string, len(resources.resourceMap))
 		for name, r := range resources.resourceMap {
 			// Since we've already precomputed the version hashes of the new snapshot,
@@ -104,7 +104,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 			}
 		}
 	default:
-		filtered = make(map[string]types.Resource)
+		filtered = make(map[string]types.ResourceWithTTL)
 		nextVersionMap = make(map[string]string, len(state.GetSubscribedResourceNames()))
 		// state.GetResourceVersions() may include resources no longer subscribed
 		// In the current code this gets silently cleaned when updating the version map
@@ -121,7 +121,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 					if r, ok := resources.resourceMap[versionName]; ok {
 						nextVersion := resources.versionMap[versionName]
 						if prevVersion != nextVersion {
-							filtered[GetResourceName(r)] = r
+							filtered[GetResourceName(r.Resource)] = r
 						}
 						nextVersionMap[versionName] = nextVersion
 					} else if found {
@@ -133,7 +133,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 				if r, ok := resources.resourceMap[name]; ok {
 					nextVersion := resources.versionMap[name]
 					if prevVersion != nextVersion {
-						filtered[GetResourceName(r)] = r
+						filtered[GetResourceName(r.Resource)] = r
 					}
 					nextVersionMap[name] = nextVersion
 				} else if found {
@@ -143,7 +143,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 		}
 	}
 
-	filteredResources := make([]types.Resource, 0)
+	filteredResources := make([]types.ResourceWithTTL, 0)
 	filteredResourceNames := make([]string, 0)
 	for name, r := range filtered {
 		filteredResources = append(filteredResources, r)

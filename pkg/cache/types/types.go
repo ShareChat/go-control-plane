@@ -15,6 +15,7 @@ type Resource interface {
 type ResourceWithTTL struct {
 	Resource Resource
 	TTL      *time.Duration
+	Version  string
 }
 
 // ResourceWithName provides a name for out-of-tree resources.
