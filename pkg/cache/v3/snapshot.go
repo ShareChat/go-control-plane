@@ -189,7 +189,6 @@ func (s *Snapshot) ConstructVersionMap() error {
 		}
 
 		for _, r := range resources.Items {
-			fmt.Printf("construct version map: typeUrl=%s, version=%s, resource=%s\n", typeURL, r.Version, GetResourceName(r.Resource))
 			if r.Version == "" {
 				return fmt.Errorf("failed to get resource version: %w", err)
 			}
