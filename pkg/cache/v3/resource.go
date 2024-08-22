@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"google.golang.org/protobuf/proto"
+	"reflect"
 
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
@@ -125,7 +126,12 @@ func GetResourceWithTTLNames(resources []types.ResourceWithTTL) []string {
 
 // MarshalResource converts the Resource to MarshaledResource.
 func MarshalResource(resource types.Resource) (types.MarshaledResource, error) {
-	return proto.MarshalOptions{Deterministic: true}.Marshal(resource)
+	t := reflect.TypeOf(resource)
+	_, ok := t.MethodByName("MarshalVTStrict")
+	if !ok {
+		return proto.MarshalOptions{Deterministic: true}.Marshal(resource)
+	}
+	return resource.MarshalVTStrict()
 }
 
 // GetResourceReferences returns a map of dependent resources keyed by resource type, given a map of resources.
