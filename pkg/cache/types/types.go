@@ -9,6 +9,10 @@ import (
 // Resource is the base interface for the xDS payload.
 type Resource interface {
 	proto.Message
+}
+
+type VtResource interface {
+	Resource
 	MarshalVTStrict() ([]byte, error)
 }
 
