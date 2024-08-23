@@ -22,6 +22,7 @@ type ResourceWithTTL struct {
 // ResourceWithName provides a name for out-of-tree resources.
 type ResourceWithName interface {
 	proto.Message
+	MarshalVTStrict() ([]byte, error)
 	GetName() string
 }
 
