@@ -25,7 +25,6 @@ import (
 	runtime "github.com/envoyproxy/go-control-plane/envoy/service/runtime/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
-	"google.golang.org/protobuf/proto"
 )
 
 // GetResponseType returns the enumeration for a valid xDS type URL.
@@ -124,14 +123,7 @@ func GetResourceWithTTLNames(resources []types.ResourceWithTTL) []string {
 
 // MarshalResource converts the Resource to MarshaledResource.
 func MarshalResource(resource types.Resource) (types.MarshaledResource, error) {
-	switch v := resource.(type) {
-	case types.VtResource:
-		return v.MarshalVTStrict()
-	case types.Resource:
-		return proto.MarshalOptions{Deterministic: true}.Marshal(v)
-	default:
-		return nil, fmt.Errorf("failed to marshal, message is %T, must satisfy the vtprotoMessage interface or want proto.Message", v)
-	}
+	return resource.MarshalVTStrict()
 }
 
 // GetResourceReferences returns a map of dependent resources keyed by resource type, given a map of resources.
