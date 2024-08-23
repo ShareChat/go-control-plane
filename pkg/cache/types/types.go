@@ -12,7 +12,6 @@ type Resource interface {
 }
 
 type VtResource interface {
-	Resource
 	MarshalVTStrict() ([]byte, error)
 }
 
