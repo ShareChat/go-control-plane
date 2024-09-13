@@ -19,6 +19,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	resource2 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
@@ -252,6 +254,12 @@ func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscover
 			if name == "" {
 				continue
 			}
+
+			if r.GetDeltaRequest().GetTypeUrl() == resource2.EndpointType {
+				cla := resource.Resource.(*endpoint.ClusterLoadAssignment)
+				fmt.Printf("Will send CLA=%s len=%d", cla.ClusterName, len(cla.Endpoints))
+			}
+
 			marshaledResource, err := MarshalResource(resource.Resource)
 			if err != nil {
 				return nil, err
