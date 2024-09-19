@@ -875,7 +875,12 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 	if len(resp.Resources) > 0 || len(resp.RemovedResources) > 0 || (state.IsWildcard() && state.IsFirst()) {
 		changedResourceNames := make([]string, 0, len(resp.Resources))
 		for _, rsc := range resp.Resources {
-			changedResourceNames = append(changedResourceNames, GetResourceName(rsc.Resource))
+			if resp.GetDeltaRequest().GetTypeUrl() != resource.EndpointType {
+				changedResourceNames = append(changedResourceNames, GetResourceName(rsc.Resource))
+			} else {
+				cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
+				changedResourceNames = append(changedResourceNames, fmt.Sprintf("%s:%d", GetResourceName(rsc.Resource), len(cla.Endpoints)))
+			}
 		}
 		nodeString := GetEnvoyNodeStr(resp.GetDeltaRequest().GetNode())
 		log2.Info().Msgf("createDeltaResponse [changed][%s]: %v", nodeString, changedResourceNames)
