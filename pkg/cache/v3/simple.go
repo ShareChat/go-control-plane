@@ -845,6 +845,22 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	return nil
 }
 
+func GetEnvoyNodeStr(node *core.Node) string {
+	host := ""
+	eth0 := ""
+	zone := ""
+	if node.Metadata != nil {
+		m := node.Metadata.GetFields()
+		if m != nil {
+			host = m["hostname"].GetStringValue()
+			eth0 = m["eth0"].GetStringValue()
+			zone = m["zone"].GetStringValue()
+		}
+	}
+
+	return eth0 + "~" + zone + "~" + host
+}
+
 // Respond to a delta watch with the provided snapshot value. If the response is nil, there has been no state change.
 func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceSnapshot, request *DeltaRequest, value chan DeltaResponse, state stream.StreamState) (*RawDeltaResponse, error) {
 	resp := createDeltaResponse(ctx, request, state, resourceContainer{
@@ -861,8 +877,9 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 		for _, rsc := range resp.Resources {
 			changedResourceNames = append(changedResourceNames, GetResourceName(rsc.Resource))
 		}
-		log2.Info().Msgf("createDeltaResponse [changed]: %v", changedResourceNames)
-		log2.Info().Msgf("createDeltaResponse [removed]: %v", resp.RemovedResources)
+		nodeString := GetEnvoyNodeStr(resp.GetDeltaRequest().GetNode())
+		log2.Info().Msgf("createDeltaResponse [changed][%s]: %v", nodeString, changedResourceNames)
+		log2.Info().Msgf("createDeltaResponse [removed][%s]: %v", nodeString, resp.RemovedResources)
 		if cache.log != nil {
 			cache.log.Debugf("node: %s, sending delta response for typeURL %s with resources: %v removed resources: %v with wildcard: %t",
 				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
