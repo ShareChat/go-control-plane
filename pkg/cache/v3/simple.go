@@ -883,6 +883,7 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 				changedResourceNames = append(changedResourceNames, fmt.Sprintf("%s:%d", GetResourceName(rsc.Resource), len(cla.Endpoints)))
 				// HACK
 				if strings.Contains(claName, "tardis-") && len(cla.Endpoints) == 0 {
+					log2.Info().Msgf("Skipping because %s has 0 endpoints", claName)
 					return nil, nil
 				}
 			}
