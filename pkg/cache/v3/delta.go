@@ -16,7 +16,6 @@ package cache
 
 import (
 	"context"
-	"github.com/rs/zerolog/log"
 	"strings"
 
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
@@ -78,7 +77,6 @@ func containsPrefixedKeyResources(data map[string]types.ResourceWithTTL, keyLike
 }
 
 func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.StreamState, resources resourceContainer) *RawDeltaResponse {
-	log.Info().Msgf("Creating delta response")
 	// variables to build our response with
 	var nextVersionMap map[string]string
 	var filtered map[string]types.ResourceWithTTL

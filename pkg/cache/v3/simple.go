@@ -879,7 +879,12 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 				changedResourceNames = append(changedResourceNames, GetResourceName(rsc.Resource))
 			} else {
 				cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
+				claName := GetResourceName(rsc.Resource)
 				changedResourceNames = append(changedResourceNames, fmt.Sprintf("%s:%d", GetResourceName(rsc.Resource), len(cla.Endpoints)))
+				// HACK
+				if strings.Contains(claName, "tardis-") && len(cla.Endpoints) == 0 {
+					return nil, nil
+				}
 			}
 		}
 		nodeString := GetEnvoyNodeStr(resp.GetDeltaRequest().GetNode())
