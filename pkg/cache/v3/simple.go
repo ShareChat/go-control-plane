@@ -29,6 +29,7 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/log"
 	"github.com/envoyproxy/go-control-plane/pkg/server/stream/v3"
+	log2 "github.com/rs/zerolog/log"
 )
 
 // ResourceSnapshot is an abstract snapshot of a collection of resources that
@@ -856,6 +857,8 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 	// We want to respond immediately for the first wildcard request in a stream, even if the response is empty
 	// otherwise, envoy won't complete initialization
 	if len(resp.Resources) > 0 || len(resp.RemovedResources) > 0 || (state.IsWildcard() && state.IsFirst()) {
+		log2.Info().Msgf("createDeltaResponse [changed]: %v", resp.Resources)
+		log2.Info().Msgf("createDeltaResponse [removed]: %v", resp.RemovedResources)
 		if cache.log != nil {
 			cache.log.Debugf("node: %s, sending delta response for typeURL %s with resources: %v removed resources: %v with wildcard: %t",
 				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
