@@ -339,6 +339,12 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		}
 
 		for name, r := range resourcesUpserted {
+			if typ == resource.EndpointType {
+				cla := r.Resource.(*endpoint.ClusterLoadAssignment)
+				if len(cla.Endpoints) == 0 {
+					log2.Info().Msgf("UpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
+				}
+			}
 			currentResources.Items[name] = *r
 		}
 
@@ -363,6 +369,12 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		resources := make(map[resource.Type][]types.ResourceWithTTL)
 		resources[typ] = make([]types.ResourceWithTTL, 0)
 		for _, r := range resourcesUpserted {
+			if typ == resource.EndpointType {
+				cla := r.Resource.(*endpoint.ClusterLoadAssignment)
+				if len(cla.Endpoints) == 0 {
+					log2.Info().Msgf("UpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
+				}
+			}
 			resources[typ] = append(resources[typ], *r)
 		}
 		s, err := NewSnapshotWithTTLs("0", resources)
