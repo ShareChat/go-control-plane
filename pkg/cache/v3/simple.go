@@ -244,70 +244,70 @@ func (cache *snapshotCache) ParseSystemVersionInfo(version string) int64 {
 }
 
 func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string, batchResourcesUpserted map[string]map[string]*types.ResourceWithTTL) error {
-	var wg sync.WaitGroup
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
 	for node, resourcesUpserted := range batchResourcesUpserted {
-		wg.Add(1)
+		if snapshot, ok := cache.snapshots[node]; ok {
+			// Add new/updated resources to the Resources map
+			index := GetResponseType(typ)
+			currentResources := snapshot.(*Snapshot).Resources[index]
+			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
 
-		go func(node string, resourcesUpserted map[string]*types.ResourceWithTTL) {
-			defer wg.Done()
-
-			cache.mu.Lock()
-			if snapshot, ok := cache.snapshots[node]; ok {
-				defer cache.mu.Unlock()
-
-				// Add new/updated resources to the Resources map
-				index := GetResponseType(typ)
-				currentResources := snapshot.(*Snapshot).Resources[index]
-				currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
-
-				if currentResources.Items == nil {
-					// Fresh resources
-					currentResources.Items = make(map[string]types.ResourceWithTTL)
-				}
-
-				for name, r := range resourcesUpserted {
-					currentResources.Items[name] = *r
-				}
-
-				// Change in version
-				currentVersion++
-				currentResources.Version = fmt.Sprintf("%d", currentVersion)
-
-				// Update
-				snapshot.(*Snapshot).Resources[index] = currentResources
-				cache.snapshots[node] = snapshot
-
-				// Respond deltas
-				if info, ok := cache.status[node]; ok {
-					info.mu.Lock()
-					defer info.mu.Unlock()
-
-					// Respond to delta watches for the node.
-					err := cache.respondDeltaWatches(ctx, info, snapshot)
-					if err != nil {
-						return
-					}
-				}
-			} else {
-				cache.mu.Unlock()
-				resources := make(map[resource.Type][]types.ResourceWithTTL)
-				resources[typ] = make([]types.ResourceWithTTL, 0)
-				for _, r := range resourcesUpserted {
-					resources[typ] = append(resources[typ], *r)
-				}
-				s, err := NewSnapshotWithTTLs("0", resources)
-				if err != nil {
-					return
-				}
-				err = cache.SetSnapshot(ctx, node, s)
-				if err != nil {
-					return
-				}
+			if currentResources.Items == nil {
+				// Fresh resources
+				currentResources.Items = make(map[string]types.ResourceWithTTL)
 			}
-		}(node, resourcesUpserted)
-	}
 
-	wg.Wait()
+			for name, r := range resourcesUpserted {
+				currentResources.Items[name] = *r
+			}
+
+			// Change in version
+			currentVersion++
+			currentResources.Version = fmt.Sprintf("%d", currentVersion)
+
+			// Update
+			snapshot.(*Snapshot).Resources[index] = currentResources
+			cache.snapshots[node] = snapshot
+
+			// Respond deltas
+			if info, ok := cache.status[node]; ok {
+				info.mu.Lock()
+
+				// Respond to delta watches for the node.
+				err := cache.respondDeltaWatches(ctx, info, snapshot)
+				if err != nil {
+					info.mu.Unlock()
+					continue
+				}
+				info.mu.Unlock()
+			}
+		} else {
+			resources := make(map[resource.Type][]types.ResourceWithTTL)
+			resources[typ] = make([]types.ResourceWithTTL, 0)
+			for _, r := range resourcesUpserted {
+				resources[typ] = append(resources[typ], *r)
+			}
+			s, err := NewSnapshotWithTTLs("0", resources)
+			if err != nil {
+				continue
+			}
+			cache.snapshots[node] = s
+
+			// Respond deltas
+			if info, ok := cache.status[node]; ok {
+				info.mu.Lock()
+
+				// Respond to delta watches for the node.
+				err := cache.respondDeltaWatches(ctx, info, snapshot)
+				if err != nil {
+					info.mu.Unlock()
+					continue
+				}
+				info.mu.Unlock()
+			}
+		}
+	}
 
 	return nil
 }
