@@ -391,14 +391,14 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 			currentVersion := cache.ParseSystemVersionInfo(prevResources.Version)
 
 			for k, v := range prevResources.Items {
-				_, ok := r[k]
+				_, ok := resourcesUpserted[k]
 				if newResources && !ok {
 					prevResources.Items[k] = v
 				} else if !newResources && !ok {
 					delete(prevResources.Items, k)
 				}
 			}
-			for k, v := range r {
+			for k, v := range resourcesUpserted {
 				_, ok := prevResources.Items[k]
 				if !ok {
 					prevResources.Items[k] = *v
