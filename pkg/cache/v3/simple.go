@@ -433,8 +433,6 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	fmt.Printf("local DeleteResources %v", resourcesToDeleted)
-
 	if typ == resource.ClusterType {
 		index := GetResponseType(typ)
 		snapshot := cache.snapshots[node]
