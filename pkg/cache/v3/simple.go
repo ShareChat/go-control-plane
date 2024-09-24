@@ -29,7 +29,6 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/log"
 	"github.com/envoyproxy/go-control-plane/pkg/server/stream/v3"
-	log2 "github.com/rs/zerolog/log"
 )
 
 // ResourceSnapshot is an abstract snapshot of a collection of resources that
@@ -261,12 +260,12 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			}
 
 			for name, r := range resourcesUpserted {
-				if typ == resource.EndpointType {
-					cla := r.Resource.(*endpoint.ClusterLoadAssignment)
-					if len(cla.Endpoints) == 0 {
-						log2.Info().Msgf("BatchUpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
-					}
-				}
+				//if typ == resource.EndpointType {
+				//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
+				//	if len(cla.Endpoints) == 0 {
+				//		log2.Info().Msgf("BatchUpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
+				//	}
+				//}
 				currentResources.Items[name] = *r
 			}
 
@@ -276,6 +275,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 
 			// Update
 			snapshot.(*Snapshot).Resources[index] = currentResources
+
 			cache.snapshots[node] = snapshot
 
 			// Respond deltas
@@ -294,12 +294,12 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			resources := make(map[resource.Type][]types.ResourceWithTTL)
 			resources[typ] = make([]types.ResourceWithTTL, 0)
 			for _, r := range resourcesUpserted {
-				if typ == resource.EndpointType {
-					cla := r.Resource.(*endpoint.ClusterLoadAssignment)
-					if len(cla.Endpoints) == 0 {
-						log2.Info().Msgf("BatchUpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
-					}
-				}
+				//if typ == resource.EndpointType {
+				//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
+				//	if len(cla.Endpoints) == 0 {
+				//		log2.Info().Msgf("BatchUpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
+				//	}
+				//}
 				resources[typ] = append(resources[typ], *r)
 			}
 			s, err := NewSnapshotWithTTLs("0", resources)
@@ -341,12 +341,12 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		}
 
 		for name, r := range resourcesUpserted {
-			if typ == resource.EndpointType {
-				cla := r.Resource.(*endpoint.ClusterLoadAssignment)
-				if len(cla.Endpoints) == 0 {
-					log2.Info().Msgf("UpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
-				}
-			}
+			//if typ == resource.EndpointType {
+			//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
+			//	if len(cla.Endpoints) == 0 {
+			//		log2.Info().Msgf("UpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
+			//	}
+			//}
 			currentResources.Items[name] = *r
 		}
 
@@ -371,12 +371,12 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		resources := make(map[resource.Type][]types.ResourceWithTTL)
 		resources[typ] = make([]types.ResourceWithTTL, 0)
 		for _, r := range resourcesUpserted {
-			if typ == resource.EndpointType {
-				cla := r.Resource.(*endpoint.ClusterLoadAssignment)
-				if len(cla.Endpoints) == 0 {
-					log2.Info().Msgf("UpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
-				}
-			}
+			//if typ == resource.EndpointType {
+			//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
+			//	if len(cla.Endpoints) == 0 {
+			//		log2.Info().Msgf("UpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
+			//	}
+			//}
 			resources[typ] = append(resources[typ], *r)
 		}
 		s, err := NewSnapshotWithTTLs("0", resources)
@@ -986,27 +986,26 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 	// We want to respond immediately for the first wildcard request in a stream, even if the response is empty
 	// otherwise, envoy won't complete initialization
 	if len(resp.Resources) > 0 || len(resp.RemovedResources) > 0 || (state.IsWildcard() && state.IsFirst()) {
-		changedResourceNames := make([]string, 0, len(resp.Resources))
-		for _, rsc := range resp.Resources {
-			if resp.GetDeltaRequest().GetTypeUrl() != resource.EndpointType {
-				changedResourceNames = append(changedResourceNames, GetResourceName(rsc.Resource))
-			} else {
-				cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
-				claName := GetResourceName(rsc.Resource)
-				changedResourceNames = append(changedResourceNames, fmt.Sprintf("%s:%d", GetResourceName(rsc.Resource), len(cla.Endpoints)))
-				// HACK
-				if (strings.Contains(claName, "tardis-") && len(cla.Endpoints) == 0) ||
-					(strings.Contains(claName, "sc-sent-post-") && len(cla.Endpoints) == 0) ||
-					(strings.Contains(claName, "mmoe-v2-1-image") && len(cla.Endpoints) == 0) ||
-					(strings.Contains(claName, "mmoe-v2-1-video") && len(cla.Endpoints) == 0) {
-					log2.Info().Msgf("Skipping because %s has 0 endpoints", claName)
-					return nil, nil
-				}
-			}
-		}
-		nodeString := GetEnvoyNodeStr(resp.GetDeltaRequest().GetNode())
-		log2.Info().Msgf("createDeltaResponse [changed][%s]: %v", nodeString, changedResourceNames)
-		log2.Info().Msgf("createDeltaResponse [removed][%s]: %v", nodeString, resp.RemovedResources)
+		//changedResourceNames := make([]string, 0, len(resp.Resources))
+		//for _, rsc := range resp.Resources {
+		//	if resp.GetDeltaRequest().GetTypeUrl() == resource.EndpointType {
+		//		changedResourceNames = append(changedResourceNames, GetResourceName(rsc.Resource))
+		//		cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
+		//		claName := GetResourceName(rsc.Resource)
+		//		changedResourceNames = append(changedResourceNames, fmt.Sprintf("%s:%d", GetResourceName(rsc.Resource), len(cla.Endpoints)))
+		//		// HACK
+		//		if (strings.Contains(claName, "tardis-") && len(cla.Endpoints) == 0) ||
+		//			(strings.Contains(claName, "sc-sent-post-") && len(cla.Endpoints) == 0) ||
+		//			(strings.Contains(claName, "mmoe-v2-1-image") && len(cla.Endpoints) == 0) ||
+		//			(strings.Contains(claName, "mmoe-v2-1-video") && len(cla.Endpoints) == 0) {
+		//			log2.Info().Msgf("Skipping because %s has 0 endpoints", claName)
+		//			return nil, nil
+		//		}
+		//		nodeString := GetEnvoyNodeStr(resp.GetDeltaRequest().GetNode())
+		//		log2.Info().Msgf("createDeltaResponse [changed][%s]: %v", nodeString, changedResourceNames)
+		//		log2.Info().Msgf("createDeltaResponse [removed][%s]: %v", nodeString, resp.RemovedResources)
+		//	}
+		//}
 		if cache.log != nil {
 			cache.log.Debugf("node: %s, sending delta response for typeURL %s with resources: %v removed resources: %v with wildcard: %t",
 				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
