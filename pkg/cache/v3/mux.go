@@ -47,12 +47,12 @@ func (mux *MuxCache) CreateWatch(request *Request, state stream.StreamState, val
 	return cache.CreateWatch(request, state, value)
 }
 
-func (mux *MuxCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) func() {
+func (mux *MuxCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) (bool, func()) {
 	key := mux.ClassifyDelta(request)
 	cache, exists := mux.Caches[key]
 	if !exists {
 		value <- nil
-		return nil
+		return false, nil
 	}
 	return cache.CreateDeltaWatch(request, state, value)
 }
