@@ -313,7 +313,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 				info.mu.Lock()
 
 				// Respond to delta watches for the node.
-				err := cache.respondDeltaWatches(ctx, info, snapshot)
+				err := cache.respondDeltaWatches(ctx, info, s)
 				if err != nil {
 					info.mu.Unlock()
 					continue
@@ -904,7 +904,7 @@ func createResponse(ctx context.Context, request *Request, resources map[string]
 }
 
 // CreateDeltaWatch returns a watch for a delta xDS request which implements the Simple SnapshotCache.
-func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) func() {
+func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) (bool, func()) {
 	nodeID := cache.hash.ID(request.GetNode())
 	t := request.GetTypeUrl()
 
@@ -934,12 +934,12 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 			cache.log.Errorf("failed to compute version for snapshot resources inline: %s", err)
 		}
 		// We don't need to respond. We're handling this in a better way in ads.
-		// response, err := cache.respondDelta(context.Background(), snapshot, request, value, state)
+		response, err := cache.respondDelta(context.Background(), snapshot, request, value, state)
 		if err != nil {
 			cache.log.Errorf("failed to respond with delta response: %s", err)
 		}
 
-		delayedResponse = true // response == nil
+		delayedResponse = response == nil
 	}
 
 	if delayedResponse {
@@ -952,10 +952,10 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 		}
 
 		info.setDeltaResponseWatch(watchID, DeltaResponseWatch{Request: request, Response: value, StreamState: state})
-		return cache.cancelDeltaWatch(nodeID, watchID)
+		return delayedResponse, cache.cancelDeltaWatch(nodeID, watchID)
 	}
 
-	return nil
+	return false, nil
 }
 
 func GetEnvoyNodeStr(node *core.Node) string {

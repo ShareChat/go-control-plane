@@ -66,7 +66,7 @@ type ConfigWatcher interface {
 	//
 	// Cancel is an optional function to release resources in the producer. If
 	// provided, the consumer may call this function multiple times.
-	CreateDeltaWatch(*DeltaRequest, stream.StreamState, chan DeltaResponse) (cancel func())
+	CreateDeltaWatch(*DeltaRequest, stream.StreamState, chan DeltaResponse) (delayedResponse bool, cancel func())
 }
 
 // ConfigFetcher fetches configuration resources from cache
