@@ -929,17 +929,25 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// - we attempted to issue a response, but the caller is already up to date
 	delayedResponse := !exists
 	if exists {
-		err := snapshot.ConstructVersionMap()
-		if err != nil {
-			cache.log.Errorf("failed to compute version for snapshot resources inline: %s", err)
-		}
-		// We don't need to respond. We're handling this in a better way in ads.
-		response, err := cache.respondDelta(context.Background(), snapshot, request, value, state)
-		if err != nil {
-			cache.log.Errorf("failed to respond with delta response: %s", err)
-		}
+		hasResources := false
+		resources := snapshot.GetResources(request.GetTypeUrl())
+		hasResources = resources != nil && len(resources) > 0
+		fmt.Printf(fmt.Sprintf("hasResources for %s hasResources=%v\n", request.GetTypeUrl(), hasResources))
+		if hasResources {
+			err := snapshot.ConstructVersionMap()
+			if err != nil {
+				cache.log.Errorf("failed to compute version for snapshot resources inline: %s", err)
+			}
 
-		delayedResponse = response == nil
+			response, err := cache.respondDelta(context.Background(), snapshot, request, value, state)
+			if err != nil {
+				cache.log.Errorf("failed to respond with delta response: %s", err)
+			}
+
+			delayedResponse = response == nil
+		} else {
+			delayedResponse = true
+		}
 	}
 
 	if delayedResponse {
