@@ -930,9 +930,8 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	delayedResponse := !exists
 	if exists {
 		hasResources := false
-		resources := snapshot.GetResources(request.GetTypeUrl())
+		resources := snapshot.GetResourcesAndTTL(request.GetTypeUrl())
 		hasResources = resources != nil && len(resources) > 0
-		fmt.Printf(fmt.Sprintf("hasResources for %s hasResources=%v\n", request.GetTypeUrl(), hasResources))
 		if hasResources {
 			err := snapshot.ConstructVersionMap()
 			if err != nil {
