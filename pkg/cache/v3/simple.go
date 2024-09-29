@@ -19,16 +19,16 @@ import (
 	"fmt"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
+	"github.com/envoyproxy/go-control-plane/pkg/log"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+	"github.com/envoyproxy/go-control-plane/pkg/server/stream/v3"
+	log2 "github.com/rs/zerolog/log"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
-	"github.com/envoyproxy/go-control-plane/pkg/log"
-	"github.com/envoyproxy/go-control-plane/pkg/server/stream/v3"
 )
 
 // ResourceSnapshot is an abstract snapshot of a collection of resources that
@@ -256,7 +256,9 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 
 			if currentResources.Items == nil {
 				// Fresh resources
-				currentResources.Items = make(map[string]types.ResourceWithTTL)
+				// currentResources.Items = make(map[string]types.ResourceWithTTL)
+				log2.Info().Msgf("BatchUpsertResources: Not writing to cache as snapshot does not exist [node=%s][typeUrl=%s]", node, typ)
+				return nil
 			}
 
 			for name, r := range resourcesUpserted {
