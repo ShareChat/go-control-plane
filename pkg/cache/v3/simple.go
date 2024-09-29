@@ -293,35 +293,32 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 				info.mu.Unlock()
 			}
 		} else {
-			resources := make(map[resource.Type][]types.ResourceWithTTL)
-			resources[typ] = make([]types.ResourceWithTTL, 0)
-			for _, r := range resourcesUpserted {
-				//if typ == resource.EndpointType {
-				//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
-				//	if len(cla.Endpoints) == 0 {
-				//		log2.Info().Msgf("BatchUpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
-				//	}
-				//}
-				resources[typ] = append(resources[typ], *r)
-			}
-			s, err := NewSnapshotWithTTLs("0", resources)
-			if err != nil {
-				continue
-			}
-			cache.snapshots[node] = s
+			log2.Info().Msgf("BatchUpsertResources: Not writing to cache as snapshot does not exist [node=%s][typeUrl=%s]", node, typ)
+			return nil
 
-			// Respond deltas
-			if info, ok := cache.status[node]; ok {
-				info.mu.Lock()
-
-				// Respond to delta watches for the node.
-				err := cache.respondDeltaWatches(ctx, info, s)
-				if err != nil {
-					info.mu.Unlock()
-					continue
-				}
-				info.mu.Unlock()
-			}
+			//resources := make(map[resource.Type][]types.ResourceWithTTL)
+			//resources[typ] = make([]types.ResourceWithTTL, 0)
+			//for _, r := range resourcesUpserted {
+			//	resources[typ] = append(resources[typ], *r)
+			//}
+			//s, err := NewSnapshotWithTTLs("0", resources)
+			//if err != nil {
+			//	continue
+			//}
+			//cache.snapshots[node] = s
+			//
+			//// Respond deltas
+			//if info, ok := cache.status[node]; ok {
+			//	info.mu.Lock()
+			//
+			//	// Respond to delta watches for the node.
+			//	err := cache.respondDeltaWatches(ctx, info, s)
+			//	if err != nil {
+			//		info.mu.Unlock()
+			//		continue
+			//	}
+			//	info.mu.Unlock()
+			//}
 		}
 	}
 
