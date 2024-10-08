@@ -244,7 +244,7 @@ func (r *RawResponse) GetDiscoveryResponse() (*discovery.DiscoveryResponse, erro
 func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscoveryResponse, error) {
 	marshaledResponse := r.marshaledResponse.Load()
 	if marshaledResponse == nil {
-		fmt.Printf("\n\n[GetDeltaDiscoveryResponse]Response is nil\n\n")
+		fmt.Printf("\n\n[GetDeltaDiscoveryResponse]Response is nil for type: %v\n\n", r.GetDeltaRequest().GetTypeUrl())
 		marshaledResources := make([]*discovery.Resource, 0)
 
 		for _, resource := range r.Resources {
