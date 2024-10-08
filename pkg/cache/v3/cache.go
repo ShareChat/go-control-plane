@@ -243,8 +243,8 @@ func (r *RawResponse) GetDiscoveryResponse() (*discovery.DiscoveryResponse, erro
 // This caching behavior is important in high throughput scenarios because grpc marshaling has a cost and it drives the cpu utilization under load.
 func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscoveryResponse, error) {
 	marshaledResponse := r.marshaledResponse.Load()
-
 	if marshaledResponse == nil {
+		fmt.Printf("\n\n[GetDeltaDiscoveryResponse]Response is nil\n\n")
 		marshaledResources := make([]*discovery.Resource, 0)
 
 		for _, resource := range r.Resources {
@@ -278,7 +278,7 @@ func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscover
 		}
 		r.marshaledResponse.Store(marshaledResponse)
 	}
-
+	fmt.Printf("\n\n[GetDeltaDiscoveryResponse]Response from cache\n\n")
 	return marshaledResponse.(*discovery.DeltaDiscoveryResponse), nil
 }
 
