@@ -113,10 +113,10 @@ func GetResourceNames(resources []types.Resource) []string {
 }
 
 // GetResourceWithTTLNames returns the resource names for a list of valid xDS response types.
-func GetResourceWithTTLNames(resources []types.ResourceWithTTL) []string {
+func GetResourceWithTTLNames(resources []VTMarshaledResource) []string {
 	out := make([]string, len(resources))
 	for i, r := range resources {
-		out[i] = GetResourceName(r.Resource)
+		out[i] = r.Name
 	}
 	return out
 }
@@ -139,19 +139,20 @@ func GetResourceReferences(resources map[string]types.ResourceWithTTL) map[resou
 func GetAllResourceReferences(resourceGroups [types.UnknownType]Resources) map[resource.Type]map[string]bool {
 	ret := map[resource.Type]map[string]bool{}
 
+	// Commenting the following as we switch to using VTMarshaledResource
 	// We only check resources that we expect to have references to other resources.
-	responseTypesWithReferences := map[types.ResponseType]struct{}{
-		types.Cluster:     {},
-		types.Listener:    {},
-		types.ScopedRoute: {},
-	}
-
-	for responseType, resourceGroup := range resourceGroups {
-		if _, ok := responseTypesWithReferences[types.ResponseType(responseType)]; ok {
-			items := resourceGroup.Items
-			getResourceReferences(items, ret)
-		}
-	}
+	//responseTypesWithReferences := map[types.ResponseType]struct{}{
+	//	types.Cluster:     {},
+	//	types.Listener:    {},
+	//	types.ScopedRoute: {},
+	//}
+	//
+	//for responseType, resourceGroup := range resourceGroups {
+	//	if _, ok := responseTypesWithReferences[types.ResponseType(responseType)]; ok {
+	//		items := resourceGroup.Items
+	//		getResourceReferences(items, ret)
+	//	}
+	//}
 
 	return ret
 }

@@ -127,7 +127,7 @@ type RawResponse struct {
 	Version string
 
 	// Resources to be included in the response.
-	Resources []types.ResourceWithTTL
+	Resources []VTMarshaledResource
 
 	// Whether this is a heartbeat response. For xDS versions that support TTL, this
 	// will be converted into a response that doesn't contain the actual resource protobuf.
@@ -151,7 +151,7 @@ type RawDeltaResponse struct {
 	SystemVersionInfo string
 
 	// Resources to be included in the response.
-	Resources []types.ResourceWithTTL
+	Resources []VTMarshaledResource
 
 	// RemovedResources is a list of resource aliases which should be dropped by the consuming client.
 	RemovedResources []string
@@ -212,17 +212,9 @@ func (r *RawResponse) GetDiscoveryResponse() (*discovery.DiscoveryResponse, erro
 		marshaledResources := make([]*anypb.Any, len(r.Resources))
 
 		for i, resource := range r.Resources {
-			maybeTtldResource, resourceType, err := r.maybeCreateTTLResource(resource)
-			if err != nil {
-				return nil, err
-			}
-			marshaledResource, err := MarshalResource(maybeTtldResource)
-			if err != nil {
-				return nil, err
-			}
 			marshaledResources[i] = &anypb.Any{
-				TypeUrl: resourceType,
-				Value:   marshaledResource,
+				TypeUrl: r.GetRequest().GetTypeUrl(),
+				Value:   resource.Resource,
 			}
 		}
 
@@ -248,13 +240,9 @@ func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscover
 		marshaledResources := make([]*discovery.Resource, 0)
 
 		for _, resource := range r.Resources {
-			name := GetResourceName(resource.Resource)
+			name := resource.Name
 			if name == "" {
 				continue
-			}
-			marshaledResource, err := MarshalResource(resource.Resource)
-			if err != nil {
-				return nil, err
 			}
 
 			if resource.Version == "" {
@@ -264,7 +252,7 @@ func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscover
 				Name: name,
 				Resource: &anypb.Any{
 					TypeUrl: r.GetDeltaRequest().GetTypeUrl(),
-					Value:   marshaledResource,
+					Value:   resource.Resource,
 				},
 				Version: resource.Version,
 			})

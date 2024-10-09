@@ -1,6 +1,10 @@
 package cache
 
-import "github.com/envoyproxy/go-control-plane/pkg/cache/types"
+import (
+	"fmt"
+	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
+	"time"
+)
 
 // Resources is a versioned group of resources.
 type Resources struct {
@@ -8,7 +12,32 @@ type Resources struct {
 	Version string
 
 	// Items in the group indexed by name.
-	Items map[string]types.ResourceWithTTL
+	Items map[string]VTMarshaledResource
+}
+
+type VTMarshaledResource struct {
+	Name     string
+	Version  string
+	Resource []byte
+	TTL      *time.Duration
+}
+
+// IndexAndMarshalResourcesByName creates a map from the resource name to the marshaled resource.
+func IndexAndMarshalResourcesByName(items []types.ResourceWithTTL) map[string]VTMarshaledResource {
+	indexed := make(map[string]VTMarshaledResource, len(items))
+	for _, item := range items {
+		out, err := item.Resource.MarshalVTStrict()
+		if err != nil {
+			fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", GetResourceName(item.Resource), err)
+			continue
+		}
+		indexed[GetResourceName(item.Resource)] = VTMarshaledResource{
+			Name:     GetResourceName(item.Resource),
+			Version:  item.Version,
+			Resource: out,
+		}
+	}
+	return indexed
 }
 
 // IndexResourcesByName creates a map from the resource name to the resource.
@@ -42,6 +71,6 @@ func NewResources(version string, items []types.Resource) Resources {
 func NewResourcesWithTTL(version string, items []types.ResourceWithTTL) Resources {
 	return Resources{
 		Version: version,
-		Items:   IndexResourcesByName(items),
+		Items:   IndexAndMarshalResourcesByName(items),
 	}
 }

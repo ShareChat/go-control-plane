@@ -121,23 +121,12 @@ func (s *Snapshot) Consistent() error {
 }
 
 // GetResources selects snapshot resources by type, returning the map of resources.
-func (s *Snapshot) GetResources(typeURL resource.Type) map[string]types.Resource {
-	resources := s.GetResourcesAndTTL(typeURL)
-	if resources == nil {
-		return nil
-	}
-
-	withoutTTL := make(map[string]types.Resource, len(resources))
-
-	for k, v := range resources {
-		withoutTTL[k] = v.Resource
-	}
-
-	return withoutTTL
+func (s *Snapshot) GetResources(typeURL resource.Type) map[string]VTMarshaledResource {
+	return s.GetResourcesAndTTL(typeURL)
 }
 
 // GetResourcesAndTTL selects snapshot resources by type, returning the map of resources and the associated TTL.
-func (s *Snapshot) GetResourcesAndTTL(typeURL resource.Type) map[string]types.ResourceWithTTL {
+func (s *Snapshot) GetResourcesAndTTL(typeURL resource.Type) map[string]VTMarshaledResource {
 	if s == nil {
 		return nil
 	}
@@ -193,7 +182,7 @@ func (s *Snapshot) ConstructVersionMap() error {
 				return fmt.Errorf("failed to get resource version: %w", err)
 			}
 
-			s.VersionMap[typeURL][GetResourceName(r.Resource)] = r.Version
+			s.VersionMap[typeURL][r.Name] = r.Version
 		}
 	}
 

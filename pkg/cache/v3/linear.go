@@ -114,19 +114,27 @@ func NewLinearCache(typeURL string, opts ...LinearCacheOption) *LinearCache {
 }
 
 func (cache *LinearCache) respond(value chan Response, staleResources []string) {
-	var resources []types.ResourceWithTTL
+	var resources []VTMarshaledResource
 	// TODO: optimize the resources slice creations across different clients
 	if len(staleResources) == 0 {
-		resources = make([]types.ResourceWithTTL, 0, len(cache.resources))
+		resources = make([]VTMarshaledResource, 0, len(cache.resources))
 		for _, resource := range cache.resources {
-			resources = append(resources, types.ResourceWithTTL{Resource: resource})
+			out, err := resource.MarshalVTStrict()
+			if err != nil {
+				continue
+			}
+			resources = append(resources, VTMarshaledResource{Resource: out})
 		}
 	} else {
-		resources = make([]types.ResourceWithTTL, 0, len(staleResources))
+		resources = make([]VTMarshaledResource, 0, len(staleResources))
 		for _, name := range staleResources {
 			resource := cache.resources[name]
 			if resource != nil {
-				resources = append(resources, types.ResourceWithTTL{Resource: resource})
+				out, err := resource.MarshalVTStrict()
+				if err != nil {
+					continue
+				}
+				resources = append(resources, VTMarshaledResource{Resource: out})
 			}
 		}
 	}
@@ -180,10 +188,16 @@ func (cache *LinearCache) respondDelta(request *DeltaRequest, value chan DeltaRe
 	// We converted types.Resource to types.ResourceWithTTL in Snapshot cache.
 	// In order to avoid affects in any other types of caches, we loop and  convert
 	// back types.Resource to types.ResourceWithTTL
-	resources := make(map[string]types.ResourceWithTTL)
+	resources := make(map[string]VTMarshaledResource)
 	for name, resource := range cache.resources {
-		resources[name] = types.ResourceWithTTL{
-			Resource: resource,
+		out, err := resource.MarshalVTStrict()
+		if err != nil {
+			continue
+		}
+		resources[name] = VTMarshaledResource{
+			Name:     name,
+			Resource: out,
+			Version:  cache.versionMap[name],
 		}
 	}
 

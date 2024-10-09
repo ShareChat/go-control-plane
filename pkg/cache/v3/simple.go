@@ -18,10 +18,8 @@ import (
 	"context"
 	"fmt"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
-	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,12 +41,12 @@ type ResourceSnapshot interface {
 
 	// GetResourcesAndTTL returns all resources of the type indicted by
 	// typeURL, together with their TTL.
-	GetResourcesAndTTL(typeURL string) map[string]types.ResourceWithTTL
+	GetResourcesAndTTL(typeURL string) map[string]VTMarshaledResource
 
 	// GetResources returns all resources of the type indicted by
 	// typeURL. This is identical to GetResourcesAndTTL, except that
 	// the TTL is omitted.
-	GetResources(typeURL string) map[string]types.Resource
+	GetResources(typeURL string) map[string]VTMarshaledResource
 
 	// ConstructVersionMap is a hint that a delta watch will soon make a
 	// call to GetVersionMap. The snapshot should construct an internal
@@ -212,7 +210,7 @@ func (cache *snapshotCache) sendHeartbeats(ctx context.Context, node string) {
 			resources := snapshot.GetResourcesAndTTL(watch.Request.GetTypeUrl())
 
 			// TODO(snowp): Construct this once per type instead of once per watch.
-			resourcesWithTTL := map[string]types.ResourceWithTTL{}
+			resourcesWithTTL := map[string]VTMarshaledResource{}
 			for k, v := range resources {
 				if v.TTL != nil {
 					resourcesWithTTL[k] = v
@@ -256,17 +254,21 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 
 			if currentResources.Items == nil {
 				// Fresh resources
-				currentResources.Items = make(map[string]types.ResourceWithTTL)
+				currentResources.Items = make(map[string]VTMarshaledResource)
 			}
 
 			for name, r := range resourcesUpserted {
-				//if typ == resource.EndpointType {
-				//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
-				//	if len(cla.Endpoints) == 0 {
-				//		log2.Info().Msgf("BatchUpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
-				//	}
-				//}
-				currentResources.Items[name] = *r
+				out, err := r.Resource.MarshalVTStrict()
+				if err != nil {
+					fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", name, err)
+					continue
+				}
+				currentResources.Items[name] = VTMarshaledResource{
+					Resource: out,
+					Name:     name,
+					Version:  r.Version,
+					TTL:      r.TTL,
+				}
 			}
 
 			// Change in version
@@ -337,17 +339,21 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 
 		if currentResources.Items == nil {
 			// Fresh resources
-			currentResources.Items = make(map[string]types.ResourceWithTTL)
+			currentResources.Items = make(map[string]VTMarshaledResource)
 		}
 
 		for name, r := range resourcesUpserted {
-			//if typ == resource.EndpointType {
-			//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
-			//	if len(cla.Endpoints) == 0 {
-			//		log2.Info().Msgf("UpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
-			//	}
-			//}
-			currentResources.Items[name] = *r
+			out, err := r.Resource.MarshalVTStrict()
+			if err != nil {
+				fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", name, err)
+				continue
+			}
+			currentResources.Items[name] = VTMarshaledResource{
+				Resource: out,
+				Name:     name,
+				Version:  r.Version,
+				TTL:      r.TTL,
+			}
 		}
 
 		// Change in version
@@ -411,7 +417,7 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 			newResources := false
 			if prevResources.Items == nil {
 				newResources = true
-				prevResources.Items = make(map[string]types.ResourceWithTTL)
+				prevResources.Items = make(map[string]VTMarshaledResource)
 			}
 			currentVersion := cache.ParseSystemVersionInfo(prevResources.Version)
 
@@ -426,7 +432,18 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 			for k, v := range resourcesUpserted {
 				_, ok := prevResources.Items[k]
 				if !ok {
-					prevResources.Items[k] = *v
+
+					out, err := v.Resource.MarshalVTStrict()
+					if err != nil {
+						fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", k, err)
+						continue
+					}
+					prevResources.Items[k] = VTMarshaledResource{
+						Resource: out,
+						Name:     k,
+						Version:  v.Version,
+						TTL:      v.TTL,
+					}
 				}
 			}
 			currentVersion++
@@ -484,117 +501,117 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 		}
 
 	} else if typ == resource.EndpointType {
-		resourceToDelete := resourcesToDeleted[0]
-		resourceToDeleteParts := strings.Split(resourcesToDeleted[0], "/")
-		serviceName := resourceToDeleteParts[4]
-		zone := resourceToDeleteParts[5]
-		portString := strings.Split(resourcesToDeleted[0], "_")[1]
-		claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
-
-		for node_, snapshot := range cache.snapshots {
-			currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
-			if rsc, found := currentResources.Items[claName]; found {
-				cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
-				for i, _ := range cla.Endpoints {
-					if cla.Endpoints[i].Locality.Zone == zone {
-						newEndpoints := make([]*endpoint.LbEndpoint, 0)
-						for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
-							if resourceToDelete == GetResourceName(lbEndpoint) {
-								continue
-							}
-							newEndpoints = append(newEndpoints, lbEndpoint)
-						}
-
-						cla.Endpoints[i].LbEndpoints = newEndpoints
-					}
-				}
-
-				currentResources.Items[claName] = types.ResourceWithTTL{
-					Resource: cla,
-				}
-			}
-
-			// Update
-			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
-			currentVersion++
-			currentResources.Version = fmt.Sprintf("%d", currentVersion)
-
-			snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
-			cache.snapshots[node_] = snapshot
-
-			// Respond deltas
-			if info, ok := cache.status[node_]; ok {
-				info.mu.Lock()
-				_ = cache.respondDeltaWatches(ctx, info, snapshot)
-				info.mu.Unlock()
-			}
-		}
+		//resourceToDelete := resourcesToDeleted[0]
+		//resourceToDeleteParts := strings.Split(resourcesToDeleted[0], "/")
+		//serviceName := resourceToDeleteParts[4]
+		//zone := resourceToDeleteParts[5]
+		//portString := strings.Split(resourcesToDeleted[0], "_")[1]
+		//claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
+		//
+		//for node_, snapshot := range cache.snapshots {
+		//	currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
+		//	if rsc, found := currentResources.Items[claName]; found {
+		//		cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
+		//		for i, _ := range cla.Endpoints {
+		//			if cla.Endpoints[i].Locality.Zone == zone {
+		//				newEndpoints := make([]*endpoint.LbEndpoint, 0)
+		//				for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
+		//					if resourceToDelete == GetResourceName(lbEndpoint) {
+		//						continue
+		//					}
+		//					newEndpoints = append(newEndpoints, lbEndpoint)
+		//				}
+		//
+		//				cla.Endpoints[i].LbEndpoints = newEndpoints
+		//			}
+		//		}
+		//
+		//		currentResources.Items[claName] = types.ResourceWithTTL{
+		//			Resource: cla,
+		//		}
+		//	}
+		//
+		//	// Update
+		//	currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+		//	currentVersion++
+		//	currentResources.Version = fmt.Sprintf("%d", currentVersion)
+		//
+		//	snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
+		//	cache.snapshots[node_] = snapshot
+		//
+		//	// Respond deltas
+		//	if info, ok := cache.status[node_]; ok {
+		//		info.mu.Lock()
+		//		_ = cache.respondDeltaWatches(ctx, info, snapshot)
+		//		info.mu.Unlock()
+		//	}
+		//}
 	}
 
 	return nil
 }
 
 func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ string, resourcesToDrain []string) error {
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-
-	fmt.Printf("local DrainResources resource %v", resourcesToDrain)
-
-	resourceToDelete := resourcesToDrain[0]
-	resourceToDeleteParts := strings.Split(resourcesToDrain[0], "/")
-	serviceName := resourceToDeleteParts[4]
-	zone := resourceToDeleteParts[5]
-	portString := strings.Split(resourcesToDrain[0], "_")[1]
-	claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
-
-	cache.log.Infof("DeleteResources claName=%s", claName)
-
-	for node_, snapshot := range cache.snapshots {
-		didModify := false
-		currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
-		if rsc, found := currentResources.Items[claName]; found {
-			cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
-			for i, _ := range cla.Endpoints {
-				if cla.Endpoints[i].Locality.Zone == zone {
-					newEndpoints := make([]*endpoint.LbEndpoint, 0)
-					for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
-						if resourceToDelete == GetResourceName(lbEndpoint) {
-							didModify = true
-							cache.log.Infof("Drain and remove endpoint %s", resourceToDelete)
-
-							// Set to UNHEALTHY/DRAINING and let Envoy gracefully remove them.
-							lbEndpoint.HealthStatus = core.HealthStatus_DRAINING
-							// continue
-						}
-						newEndpoints = append(newEndpoints, lbEndpoint)
-					}
-
-					cla.Endpoints[i].LbEndpoints = newEndpoints
-				}
-			}
-
-			currentResources.Items[claName] = types.ResourceWithTTL{
-				Resource: cla,
-			}
-		}
-
-		if didModify {
-			// Update
-			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
-			currentVersion++
-			currentResources.Version = fmt.Sprintf("%d", currentVersion)
-
-			snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
-			cache.snapshots[node_] = snapshot
-
-			// Respond deltas
-			if info, ok := cache.status[node_]; ok {
-				info.mu.Lock()
-				_ = cache.respondDeltaWatches(ctx, info, snapshot)
-				info.mu.Unlock()
-			}
-		}
-	}
+	//cache.mu.Lock()
+	//defer cache.mu.Unlock()
+	//
+	//fmt.Printf("local DrainResources resource %v", resourcesToDrain)
+	//
+	//resourceToDelete := resourcesToDrain[0]
+	//resourceToDeleteParts := strings.Split(resourcesToDrain[0], "/")
+	//serviceName := resourceToDeleteParts[4]
+	//zone := resourceToDeleteParts[5]
+	//portString := strings.Split(resourcesToDrain[0], "_")[1]
+	//claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
+	//
+	//cache.log.Infof("DeleteResources claName=%s", claName)
+	//
+	//for node_, snapshot := range cache.snapshots {
+	//	didModify := false
+	//	currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
+	//	if rsc, found := currentResources.Items[claName]; found {
+	//		cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
+	//		for i, _ := range cla.Endpoints {
+	//			if cla.Endpoints[i].Locality.Zone == zone {
+	//				newEndpoints := make([]*endpoint.LbEndpoint, 0)
+	//				for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
+	//					if resourceToDelete == GetResourceName(lbEndpoint) {
+	//						didModify = true
+	//						cache.log.Infof("Drain and remove endpoint %s", resourceToDelete)
+	//
+	//						// Set to UNHEALTHY/DRAINING and let Envoy gracefully remove them.
+	//						lbEndpoint.HealthStatus = core.HealthStatus_DRAINING
+	//						// continue
+	//					}
+	//					newEndpoints = append(newEndpoints, lbEndpoint)
+	//				}
+	//
+	//				cla.Endpoints[i].LbEndpoints = newEndpoints
+	//			}
+	//		}
+	//
+	//		currentResources.Items[claName] = types.ResourceWithTTL{
+	//			Resource: cla,
+	//		}
+	//	}
+	//
+	//	if didModify {
+	//		// Update
+	//		currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+	//		currentVersion++
+	//		currentResources.Version = fmt.Sprintf("%d", currentVersion)
+	//
+	//		snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
+	//		cache.snapshots[node_] = snapshot
+	//
+	//		// Respond deltas
+	//		if info, ok := cache.status[node_]; ok {
+	//			info.mu.Lock()
+	//			_ = cache.respondDeltaWatches(ctx, info, snapshot)
+	//			info.mu.Unlock()
+	//		}
+	//	}
+	//}
 
 	return nil
 }
@@ -753,7 +770,7 @@ func nameSet(names []string) map[string]bool {
 }
 
 // superset checks that all resources are listed in the names set.
-func superset(names map[string]bool, resources map[string]types.ResourceWithTTL) error {
+func superset(names map[string]bool, resources map[string]VTMarshaledResource) error {
 	for resourceName := range resources {
 		if _, exists := names[resourceName]; !exists {
 			return fmt.Errorf("%q not listed", resourceName)
@@ -855,7 +872,7 @@ func (cache *snapshotCache) cancelWatch(nodeID string, watchID int64) func() {
 
 // Respond to a watch with the snapshot value. The value channel should have capacity not to block.
 // TODO(kuat) do not respond always, see issue https://github.com/envoyproxy/go-control-plane/issues/46
-func (cache *snapshotCache) respond(ctx context.Context, request *Request, value chan Response, resources map[string]types.ResourceWithTTL, version string, heartbeat bool) error {
+func (cache *snapshotCache) respond(ctx context.Context, request *Request, value chan Response, resources map[string]VTMarshaledResource, version string, heartbeat bool) error {
 	// for ADS, the request names must match the snapshot names
 	// if they do not, then the watch is never responded, and it is expected that envoy makes another request
 	if len(request.GetResourceNames()) != 0 && cache.ads {
@@ -875,8 +892,8 @@ func (cache *snapshotCache) respond(ctx context.Context, request *Request, value
 	}
 }
 
-func createResponse(ctx context.Context, request *Request, resources map[string]types.ResourceWithTTL, version string, heartbeat bool) Response {
-	filtered := make([]types.ResourceWithTTL, 0, len(resources))
+func createResponse(ctx context.Context, request *Request, resources map[string]VTMarshaledResource, version string, heartbeat bool) Response {
+	filtered := make([]VTMarshaledResource, 0, len(resources))
 
 	// Reply only with the requested resources. Envoy may ask each resource
 	// individually in a separate stream. It is ok to reply with the same version

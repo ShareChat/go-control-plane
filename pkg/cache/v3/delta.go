@@ -18,13 +18,12 @@ import (
 	"context"
 	"strings"
 
-	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/server/stream/v3"
 )
 
 // groups together resource-related arguments for the createDeltaResponse function
 type resourceContainer struct {
-	resourceMap   map[string]types.ResourceWithTTL
+	resourceMap   map[string]VTMarshaledResource
 	versionMap    map[string]string
 	systemVersion string
 }
@@ -66,7 +65,7 @@ func containsPrefixedKey(data map[string]string, keyLike string) ([]string, bool
 	return resNames, len(resNames) > 0
 }
 
-func containsPrefixedKeyResources(data map[string]types.ResourceWithTTL, keyLike string) ([]string, bool) {
+func containsPrefixedKeyResources(data map[string]VTMarshaledResource, keyLike string) ([]string, bool) {
 	resNames := make([]string, 0)
 	for key := range data {
 		if strings.Contains(key, keyLike) {
@@ -79,11 +78,11 @@ func containsPrefixedKeyResources(data map[string]types.ResourceWithTTL, keyLike
 func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.StreamState, resources resourceContainer) *RawDeltaResponse {
 	// variables to build our response with
 	var nextVersionMap map[string]string
-	var filtered map[string]types.ResourceWithTTL
+	var filtered map[string]VTMarshaledResource
 	var toRemove []string
 	switch {
 	case state.IsWildcard():
-		filtered = make(map[string]types.ResourceWithTTL)
+		filtered = make(map[string]VTMarshaledResource)
 		nextVersionMap = make(map[string]string, len(resources.resourceMap))
 		for name, r := range resources.resourceMap {
 			// Since we've already precomputed the version hashes of the new snapshot,
@@ -104,7 +103,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 			}
 		}
 	default:
-		filtered = make(map[string]types.ResourceWithTTL)
+		filtered = make(map[string]VTMarshaledResource)
 		nextVersionMap = make(map[string]string, len(state.GetSubscribedResourceNames()))
 		// state.GetResourceVersions() may include resources no longer subscribed
 		// In the current code this gets silently cleaned when updating the version map
@@ -121,7 +120,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 					if r, ok := resources.resourceMap[versionName]; ok {
 						nextVersion := resources.versionMap[versionName]
 						if prevVersion != nextVersion {
-							filtered[GetResourceName(r.Resource)] = r
+							filtered[r.Name] = r
 						}
 						nextVersionMap[versionName] = nextVersion
 					} else if found {
@@ -133,7 +132,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 				if r, ok := resources.resourceMap[name]; ok {
 					nextVersion := resources.versionMap[name]
 					if prevVersion != nextVersion {
-						filtered[GetResourceName(r.Resource)] = r
+						filtered[r.Name] = r
 					}
 					nextVersionMap[name] = nextVersion
 				} else if found {
@@ -143,8 +142,8 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 		}
 	}
 
-	filteredResources := make([]types.ResourceWithTTL, 0)
-	filteredResourceNames := make([]string, 0)
+	filteredResources := make([]VTMarshaledResource, len(filtered))
+	filteredResourceNames := make([]string, len(filtered))
 	for name, r := range filtered {
 		filteredResources = append(filteredResources, r)
 		filteredResourceNames = append(filteredResourceNames, name)
