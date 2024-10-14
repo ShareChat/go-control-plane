@@ -396,7 +396,7 @@ func (cache *LinearCache) CreateWatch(request *Request, _ stream.StreamState, va
 	}
 }
 
-func (cache *LinearCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) func() {
+func (cache *LinearCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) (func(), bool) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
@@ -426,10 +426,10 @@ func (cache *LinearCache) CreateDeltaWatch(request *DeltaRequest, state stream.S
 
 		cache.deltaWatches[watchID] = DeltaResponseWatch{Request: request, Response: value, StreamState: state}
 
-		return cache.cancelDeltaWatch(watchID)
+		return cache.cancelDeltaWatch(watchID), true
 	}
 
-	return nil
+	return nil, false
 }
 
 func (cache *LinearCache) updateVersionMap(modified map[string]struct{}) error {

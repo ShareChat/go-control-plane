@@ -921,7 +921,7 @@ func createResponse(ctx context.Context, request *Request, resources map[string]
 }
 
 // CreateDeltaWatch returns a watch for a delta xDS request which implements the Simple SnapshotCache.
-func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) func() {
+func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) (func(), bool) {
 	nodeID := cache.hash.ID(request.GetNode())
 	t := request.GetTypeUrl()
 
@@ -945,34 +945,43 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// - a snapshot exists, but we failed to initialize its version map
 	// - we attempted to issue a response, but the caller is already up to date
 	delayedResponse := !exists
+	var response *RawDeltaResponse = nil
 	if exists {
 		err := snapshot.ConstructVersionMap()
 		if err != nil {
 			cache.log.Errorf("failed to compute version for snapshot resources inline: %s", err)
 		}
-		// We don't need to respond. We're handling this in a better way in ads.
-		// response, err := cache.respondDelta(context.Background(), snapshot, request, value, state)
+		response, err = cache.respondDelta(context.Background(), snapshot, request, value, state)
 		if err != nil {
 			cache.log.Errorf("failed to respond with delta response: %s", err)
 		}
 
-		delayedResponse = true // response == nil
+		delayedResponse = response == nil
+		if snapshot.GetResourcesAndTTL(request.GetTypeUrl()) != nil {
+			delayedResponse = len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) == 0
+		}
 	}
 
 	if delayedResponse {
 		watchID := cache.nextDeltaWatchID()
+		info.setDeltaResponseWatch(watchID, DeltaResponseWatch{Request: request, Response: value, StreamState: state})
+
+		lenResources := 0
 
 		if exists {
+			resources := snapshot.GetResources(request.GetTypeUrl())
+			if resources != nil {
+				lenResources = len(resources)
+			}
 			cache.log.Infof("open delta watch ID:%d for %s Resources:%v from nodeID: %q,  version %q", watchID, t, state.GetSubscribedResourceNames(), nodeID, snapshot.GetVersion(t))
+			return cache.cancelDeltaWatch(nodeID, watchID), lenResources == 0
 		} else {
 			cache.log.Infof("open delta watch ID:%d for %s Resources:%v from nodeID: %q", watchID, t, state.GetSubscribedResourceNames(), nodeID)
+			return cache.cancelDeltaWatch(nodeID, watchID), true
 		}
-
-		info.setDeltaResponseWatch(watchID, DeltaResponseWatch{Request: request, Response: value, StreamState: state})
-		return cache.cancelDeltaWatch(nodeID, watchID)
 	}
 
-	return nil
+	return nil, false
 }
 
 func GetEnvoyNodeStr(node *core.Node) string {
@@ -1002,27 +1011,10 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 	// Only send a response if there were changes
 	// We want to respond immediately for the first wildcard request in a stream, even if the response is empty
 	// otherwise, envoy won't complete initialization
-	if len(resp.Resources) > 0 || len(resp.RemovedResources) > 0 || (state.IsWildcard() && state.IsFirst()) {
-		//changedResourceNames := make([]string, 0, len(resp.Resources))
-		//for _, rsc := range resp.Resources {
-		//	if resp.GetDeltaRequest().GetTypeUrl() == resource.EndpointType {
-		//		changedResourceNames = append(changedResourceNames, GetResourceName(rsc.Resource))
-		//		cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
-		//		claName := GetResourceName(rsc.Resource)
-		//		changedResourceNames = append(changedResourceNames, fmt.Sprintf("%s:%d", GetResourceName(rsc.Resource), len(cla.Endpoints)))
-		//		// HACK
-		//		if (strings.Contains(claName, "tardis-") && len(cla.Endpoints) == 0) ||
-		//			(strings.Contains(claName, "sc-sent-post-") && len(cla.Endpoints) == 0) ||
-		//			(strings.Contains(claName, "mmoe-v2-1-image") && len(cla.Endpoints) == 0) ||
-		//			(strings.Contains(claName, "mmoe-v2-1-video") && len(cla.Endpoints) == 0) {
-		//			log2.Info().Msgf("Skipping because %s has 0 endpoints", claName)
-		//			return nil, nil
-		//		}
-		//		nodeString := GetEnvoyNodeStr(resp.GetDeltaRequest().GetNode())
-		//		log2.Info().Msgf("createDeltaResponse [changed][%s]: %v", nodeString, changedResourceNames)
-		//		log2.Info().Msgf("createDeltaResponse [removed][%s]: %v", nodeString, resp.RemovedResources)
-		//	}
-		//}
+	if len(resp.Resources) > 0 || len(resp.RemovedResources) > 0 {
+
+		fmt.Printf("will respond: %d resources, typeUrl=%s\n", len(resp.Resources)+len(resp.RemovedResources), request.GetTypeUrl())
+
 		if cache.log != nil {
 			cache.log.Debugf("node: %s, sending delta response for typeURL %s with resources: %v removed resources: %v with wildcard: %t",
 				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
