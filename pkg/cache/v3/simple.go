@@ -956,10 +956,10 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 			cache.log.Errorf("failed to respond with delta response: %s", err)
 		}
 
-		delayedResponse = response == nil
 		if snapshot.GetResourcesAndTTL(request.GetTypeUrl()) != nil {
 			delayedResponse = len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) == 0
 		}
+		delayedResponse = response == nil
 	}
 
 	if delayedResponse {
@@ -1025,6 +1025,8 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 		case <-ctx.Done():
 			return resp, context.Canceled
 		}
+	} else {
+		fmt.Printf("will respond NOT: %d resources, typeUrl=%s\n", len(resp.Resources)+len(resp.RemovedResources), request.GetTypeUrl())
 	}
 	return nil, nil
 }

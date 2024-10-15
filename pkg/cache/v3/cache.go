@@ -236,7 +236,6 @@ func (r *RawResponse) GetDiscoveryResponse() (*discovery.DiscoveryResponse, erro
 func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscoveryResponse, error) {
 	marshaledResponse := r.marshaledResponse.Load()
 	if marshaledResponse == nil {
-		fmt.Printf("\n\n[GetDeltaDiscoveryResponse]Response is nil for type: %v\n\n", r.GetDeltaRequest().GetTypeUrl())
 		marshaledResources := make([]*discovery.Resource, 0)
 
 		for _, resource := range r.Resources {
@@ -266,7 +265,6 @@ func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscover
 		}
 		r.marshaledResponse.Store(marshaledResponse)
 	}
-	fmt.Printf("\n\n[GetDeltaDiscoveryResponse]Response from cache\n\n")
 	return marshaledResponse.(*discovery.DeltaDiscoveryResponse), nil
 }
 
