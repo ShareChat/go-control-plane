@@ -903,7 +903,7 @@ func createResponse(ctx context.Context, request *Request, resources map[string]
 }
 
 // CreateDeltaWatch returns a watch for a delta xDS request which implements the Simple SnapshotCache.
-func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) (bool, func()) {
+func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) (func(), bool) {
 	nodeID := cache.hash.ID(request.GetNode())
 	t := request.GetTypeUrl()
 
@@ -958,10 +958,10 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 		}
 
 		info.setDeltaResponseWatch(watchID, DeltaResponseWatch{Request: request, Response: value, StreamState: state})
-		return delayedResponse, cache.cancelDeltaWatch(nodeID, watchID)
+		return cache.cancelDeltaWatch(nodeID, watchID), delayedResponse
 	}
 
-	return false, nil
+	return nil, false
 }
 
 func GetEnvoyNodeStr(node *core.Node) string {
