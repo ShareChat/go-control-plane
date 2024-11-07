@@ -94,15 +94,15 @@ type SnapshotCache interface {
 	// GetStatusKeys retrieves node IDs for all statuses.
 	GetStatusKeys() []string
 
-	UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL) error
+	UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL, isCanary bool) error
 
-	BatchUpsertResources(ctx context.Context, typ string, resourcesUpserted map[string]map[string]*types.ResourceWithTTL) error
+	BatchUpsertResources(ctx context.Context, typ string, resourcesUpserted map[string]map[string]*types.ResourceWithTTL, isCanary bool) error
 
-	DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error
+	DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string, isCanary bool) error
 
-	DrainResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error
+	DrainResources(ctx context.Context, node string, typ string, resourcesToDeleted []string, isCanary bool) error
 
-	UpdateVirtualHosts(ctx context.Context, node string, typ string, resources map[string]map[string]*types.ResourceWithTTL) error
+	UpdateVirtualHosts(ctx context.Context, node string, typ string, resources map[string]map[string]*types.ResourceWithTTL, isCanary bool) error
 }
 
 type snapshotCache struct {
@@ -244,7 +244,7 @@ func (cache *snapshotCache) ParseSystemVersionInfo(version string) int64 {
 	return parsed
 }
 
-func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string, batchResourcesUpserted map[string]map[string]*types.ResourceWithTTL) error {
+func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string, batchResourcesUpserted map[string]map[string]*types.ResourceWithTTL, isCanary bool) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	for node, resourcesUpserted := range batchResourcesUpserted {
@@ -325,7 +325,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 	return nil
 }
 
-func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL) error {
+func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL, isCanary bool) error {
 	cache.mu.Lock()
 	if snapshot, ok := cache.snapshots[node]; ok {
 		defer cache.mu.Unlock()
@@ -391,7 +391,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 	return nil
 }
 
-func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, typ string, resources map[string]map[string]*types.ResourceWithTTL) error {
+func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, typ string, resources map[string]map[string]*types.ResourceWithTTL, isCanary bool) error {
 	index := GetResponseType(typ)
 
 	var wg sync.WaitGroup
@@ -453,7 +453,7 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 	return nil
 }
 
-func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error {
+func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string, isCanary bool) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
@@ -533,7 +533,7 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 	return nil
 }
 
-func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ string, resourcesToDrain []string) error {
+func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ string, resourcesToDrain []string, isCanary bool) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
