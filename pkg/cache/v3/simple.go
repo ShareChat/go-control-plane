@@ -72,7 +72,7 @@ type CustomSnapshotCacheOpts struct {
 
 type OperationOpts struct {
 	Id                 string
-	Checker            func(nodestr string, ops OperationOpts) bool
+	Checker            func(nodestr string, ops *OperationOpts) bool
 	AllowedNodesForOps []string
 }
 
@@ -114,15 +114,15 @@ type SnapshotCache interface {
 	// GetStatusKeys retrieves node IDs for all statuses.
 	GetStatusKeys() []string
 
-	UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL, isCanary bool) error
+	UpsertResources(ctx context.Context, opts *CustomSnapshotCacheOpts) error
 
 	BatchUpsertResources(ctx context.Context, opts *CustomSnapshotCacheOpts) error
 
-	DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string, isCanary bool) error
+	DeleteResources(ctx context.Context, opts *CustomSnapshotCacheOpts) error
 
-	DrainResources(ctx context.Context, node string, typ string, resourcesToDeleted []string, isCanary bool) error
+	DrainResources(ctx context.Context, opts *CustomSnapshotCacheOpts) error
 
-	UpdateVirtualHosts(ctx context.Context, node string, typ string, resources map[string]map[string]*types.ResourceWithTTL, isCanary bool) error
+	UpdateVirtualHosts(ctx context.Context, opts *CustomSnapshotCacheOpts) error
 }
 
 type snapshotCache struct {
@@ -269,7 +269,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, opts *Cust
 	defer cache.mu.Unlock()
 	for node, resourcesUpserted := range opts.ResourcesBatch {
 		if snapshot, ok := cache.snapshots[node]; ok {
-			finalSnapshot := snapshot
+			finalSnapshot := snapshot.(*Snapshot)
 			// Add new/updated resources to the Resources map
 			index := GetResponseType(opts.ResourceTypeUrl)
 			currentResources := snapshot.(*Snapshot).Resources[index]
@@ -307,7 +307,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, opts *Cust
 			} else {
 				snapshot.(*Snapshot).Resources[index] = currentResources
 				cache.snapshots[node] = snapshot
-				finalSnapshot = snapshot
+				finalSnapshot = snapshot.(*Snapshot)
 			}
 
 			// Respond deltas
@@ -315,7 +315,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, opts *Cust
 				info.mu.Lock()
 
 				// Respond to delta watches for the node.
-				err := cache.respondDeltaWatches(ctx, info, finalSnapshot, opts.Operation)
+				err := cache.respondDeltaWatches(ctx, info, finalSnapshot, &opts.Operation)
 				if err != nil {
 					info.mu.Unlock()
 					continue
@@ -355,21 +355,22 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, opts *Cust
 	return nil
 }
 
-func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL, isCanary bool) error {
+func (cache *snapshotCache) UpsertResources(ctx context.Context, opts *CustomSnapshotCacheOpts) error {
 	cache.mu.Lock()
-	if snapshot, ok := cache.snapshots[node]; ok {
+	if snapshot, ok := cache.snapshots[opts.NodeId]; ok {
 		defer cache.mu.Unlock()
 		// Add new/updated resources to the Resources map
-		index := GetResponseType(typ)
+		index := GetResponseType(opts.ResourceTypeUrl)
 		currentResources := snapshot.(*Snapshot).Resources[index]
 		currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+		finalSnap := snapshot.(*Snapshot)
 
 		if currentResources.Items == nil {
 			// Fresh resources
 			currentResources.Items = make(map[string]types.ResourceWithTTL)
 		}
 
-		for name, r := range resourcesUpserted {
+		for name, r := range opts.Resources {
 			//if typ == resource.EndpointType {
 			//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
 			//	if len(cla.Endpoints) == 0 {
@@ -384,46 +385,46 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		currentResources.Version = fmt.Sprintf("%d", currentVersion)
 
 		// Update
-		if !isCanary {
+		if opts.Operation.Id == CanaryOpsId {
+			snap := &Snapshot{
+				Resources:  [10]Resources{},
+				VersionMap: cache.snapshots[opts.NodeId].(*Snapshot).VersionMap,
+			}
+			snap.Resources[index] = currentResources
+			finalSnap = snap
+		} else {
 			snapshot.(*Snapshot).Resources[index] = currentResources
-			cache.snapshots[node] = snapshot
+			cache.snapshots[opts.NodeId] = snapshot
+			finalSnap = snapshot.(*Snapshot)
 		}
 
 		// Respond deltas
-		if info, ok := cache.status[node]; ok {
+		if info, ok := cache.status[opts.NodeId]; ok {
 			info.mu.Lock()
 			defer info.mu.Unlock()
 
 			// Respond to delta watches for the node.
-			if !isCanary {
-				return cache.respondDeltaWatches(ctx, info, snapshot, nil)
-			} else {
-				snap := &Snapshot{
-					Resources:  [10]Resources{},
-					VersionMap: cache.snapshots[node].(*Snapshot).VersionMap,
-				}
-				snap.Resources[index] = currentResources
-				return cache.respondDeltaWatches(ctx, info, snap, isCanary)
-			}
+			return cache.respondDeltaWatches(ctx, info, finalSnap, &opts.Operation)
+
 		}
 	} else {
 		cache.mu.Unlock()
 		resources := make(map[resource.Type][]types.ResourceWithTTL)
-		resources[typ] = make([]types.ResourceWithTTL, 0)
-		for _, r := range resourcesUpserted {
+		resources[opts.ResourceTypeUrl] = make([]types.ResourceWithTTL, 0)
+		for _, r := range opts.Resources {
 			//if typ == resource.EndpointType {
 			//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
 			//	if len(cla.Endpoints) == 0 {
 			//		log2.Info().Msgf("UpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
 			//	}
 			//}
-			resources[typ] = append(resources[typ], *r)
+			resources[opts.ResourceTypeUrl] = append(resources[opts.ResourceTypeUrl], *r)
 		}
 		s, err := NewSnapshotWithTTLs("0", resources)
 		if err != nil {
 			return err
 		}
-		err = cache.SetSnapshot(ctx, node, s)
+		err = cache.SetSnapshot(ctx, opts.NodeId, s)
 		if err != nil {
 			return err
 		}
@@ -432,11 +433,11 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 	return nil
 }
 
-func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, typ string, resources map[string]map[string]*types.ResourceWithTTL, isCanary bool) error {
-	index := GetResponseType(typ)
+func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, opts *CustomSnapshotCacheOpts) error {
+	index := GetResponseType(opts.ResourceTypeUrl)
 
 	var wg sync.WaitGroup
-	for node, r := range resources {
+	for node, r := range opts.ResourcesBatch {
 		wg.Add(1)
 		go func(node string, resourcesUpserted map[string]*types.ResourceWithTTL) {
 			cache.mu.Lock()
@@ -447,6 +448,8 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 			if !ok {
 				return
 			}
+			finalSnap := snapshot.(*Snapshot)
+
 			prevResources := snapshot.(*Snapshot).Resources[index]
 			newResources := false
 			if prevResources.Items == nil {
@@ -473,9 +476,17 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 			prevResources.Version = fmt.Sprintf("%d", currentVersion)
 
 			// Update
-			if !isCanary {
+			if opts.Operation.Id == CanaryOpsId {
+				snap := &Snapshot{
+					Resources:  [10]Resources{},
+					VersionMap: cache.snapshots[opts.NodeId].(*Snapshot).VersionMap,
+				}
+				snap.Resources[index] = prevResources
+				finalSnap = snap
+			} else {
 				snapshot.(*Snapshot).Resources[index] = prevResources
-				cache.snapshots[node] = snapshot
+				cache.snapshots[opts.NodeId] = snapshot
+				finalSnap = snapshot.(*Snapshot)
 			}
 
 			// Respond deltas
@@ -484,22 +495,11 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 				defer info.mu.Unlock()
 
 				// Respond to delta watches for the node.
-				if !isCanary {
-					err := cache.respondDeltaWatches(ctx, info, snapshot, isCanary)
-					if err != nil {
-						return
-					}
-				} else {
-					snap := &Snapshot{
-						Resources:  [10]Resources{},
-						VersionMap: cache.snapshots[node].(*Snapshot).VersionMap,
-					}
-					snap.Resources[index] = prevResources
-					err := cache.respondDeltaWatches(ctx, info, snap, isCanary)
-					if err != nil {
-						return
-					}
+				err := cache.respondDeltaWatches(ctx, info, finalSnap, &opts.Operation)
+				if err != nil {
+					return
 				}
+
 			}
 		}(node, r)
 	}
@@ -508,52 +508,54 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 	return nil
 }
 
-func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string, isCanary bool) error {
+func (cache *snapshotCache) DeleteResources(ctx context.Context, opts *CustomSnapshotCacheOpts) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	if typ == resource.ClusterType {
-		index := GetResponseType(typ)
-		snapshot := cache.snapshots[node]
+	if opts.ResourceTypeUrl == resource.ClusterType {
+		index := GetResponseType(opts.ResourceTypeUrl)
+		snapshot := cache.snapshots[opts.NodeId]
 		prevResources := snapshot.(*Snapshot).Resources[index]
 		currentVersion := cache.ParseSystemVersionInfo(prevResources.Version)
 
-		for _, k := range resourcesToDeleted {
+		for _, k := range opts.ResourcesToRemove {
 			delete(prevResources.Items, k)
 		}
 
 		currentVersion++
 		prevResources.Version = fmt.Sprintf("%d", currentVersion)
+
+		finalSnap := snapshot.(*Snapshot)
+
 		// Update
-		if !isCanary {
+		if opts.Operation.Id == CanaryOpsId {
+			snap := &Snapshot{
+				Resources:  [10]Resources{},
+				VersionMap: cache.snapshots[opts.NodeId].(*Snapshot).VersionMap,
+			}
+			snap.Resources[index] = prevResources
+			finalSnap = snap
+		} else {
 			snapshot.(*Snapshot).Resources[index] = prevResources
-			cache.snapshots[node] = snapshot
+			cache.snapshots[opts.NodeId] = snapshot
+			finalSnap = snapshot.(*Snapshot)
 		}
 
 		// Respond deltas
-		if info, ok := cache.status[node]; ok {
+		if info, ok := cache.status[opts.NodeId]; ok {
 			info.mu.Lock()
 			defer info.mu.Unlock()
 
 			// Respond to delta watches for the node.
-			if !isCanary {
-				return cache.respondDeltaWatches(ctx, info, snapshot, isCanary)
-			} else {
-				snap := &Snapshot{
-					Resources:  [10]Resources{},
-					VersionMap: cache.snapshots[node].(*Snapshot).VersionMap,
-				}
-				snap.Resources[index] = prevResources
-				return cache.respondDeltaWatches(ctx, info, snap, isCanary)
-			}
+			return cache.respondDeltaWatches(ctx, info, finalSnap, &opts.Operation)
 		}
 
-	} else if typ == resource.EndpointType {
-		resourceToDelete := resourcesToDeleted[0]
-		resourceToDeleteParts := strings.Split(resourcesToDeleted[0], "/")
+	} else if opts.ResourceTypeUrl == resource.EndpointType {
+		resourceToDelete := opts.ResourcesToRemove[0]
+		resourceToDeleteParts := strings.Split(opts.ResourcesToRemove[0], "/")
 		serviceName := resourceToDeleteParts[4]
 		zone := resourceToDeleteParts[5]
-		portString := strings.Split(resourcesToDeleted[0], "_")[1]
+		portString := strings.Split(opts.ResourcesToRemove[0], "_")[1]
 		claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
 
 		for node_, snapshot := range cache.snapshots {
@@ -579,29 +581,30 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 				}
 			}
 
+			finalSnap := snapshot.(*Snapshot)
+
 			// Update
 			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
 			currentVersion++
 			currentResources.Version = fmt.Sprintf("%d", currentVersion)
 
-			if !isCanary {
+			if opts.Operation.Id == CanaryOpsId {
+				snap := &Snapshot{
+					Resources:  [10]Resources{},
+					VersionMap: cache.snapshots[opts.NodeId].(*Snapshot).VersionMap,
+				}
+				snap.Resources[types.Endpoint] = currentResources
+				finalSnap = snap
+			} else {
 				snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
-				cache.snapshots[node_] = snapshot
+				cache.snapshots[opts.NodeId] = snapshot
+				finalSnap = snapshot.(*Snapshot)
 			}
 
 			// Respond deltas
 			if info, ok := cache.status[node_]; ok {
 				info.mu.Lock()
-				if !isCanary {
-					_ = cache.respondDeltaWatches(ctx, info, snapshot, isCanary)
-				} else {
-					snap := &Snapshot{
-						Resources:  [10]Resources{},
-						VersionMap: cache.snapshots[node].(*Snapshot).VersionMap,
-					}
-					snap.Resources[types.Endpoint] = currentResources
-					_ = cache.respondDeltaWatches(ctx, info, snap, isCanary)
-				}
+				_ = cache.respondDeltaWatches(ctx, info, finalSnap, &opts.Operation)
 				info.mu.Unlock()
 			}
 		}
@@ -610,79 +613,79 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 	return nil
 }
 
-func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ string, resourcesToDrain []string, isCanary bool) error {
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-
-	fmt.Printf("local DrainResources resource %v", resourcesToDrain)
-
-	resourceToDelete := resourcesToDrain[0]
-	resourceToDeleteParts := strings.Split(resourcesToDrain[0], "/")
-	serviceName := resourceToDeleteParts[4]
-	zone := resourceToDeleteParts[5]
-	portString := strings.Split(resourcesToDrain[0], "_")[1]
-	claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
-
-	cache.log.Infof("DeleteResources claName=%s", claName)
-
-	for node_, snapshot := range cache.snapshots {
-		didModify := false
-		currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
-		if rsc, found := currentResources.Items[claName]; found {
-			cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
-			for i, _ := range cla.Endpoints {
-				if cla.Endpoints[i].Locality.Zone == zone {
-					newEndpoints := make([]*endpoint.LbEndpoint, 0)
-					for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
-						if resourceToDelete == GetResourceName(lbEndpoint) {
-							didModify = true
-							cache.log.Infof("Drain and remove endpoint %s", resourceToDelete)
-
-							// Set to UNHEALTHY/DRAINING and let Envoy gracefully remove them.
-							lbEndpoint.HealthStatus = core.HealthStatus_DRAINING
-							// continue
-						}
-						newEndpoints = append(newEndpoints, lbEndpoint)
-					}
-
-					cla.Endpoints[i].LbEndpoints = newEndpoints
-				}
-			}
-
-			currentResources.Items[claName] = types.ResourceWithTTL{
-				Resource: cla,
-			}
-		}
-
-		if didModify {
-			// Update
-			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
-			currentVersion++
-			currentResources.Version = fmt.Sprintf("%d", currentVersion)
-
-			if !isCanary {
-				snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
-				cache.snapshots[node_] = snapshot
-			}
-
-			// Respond deltas
-			if info, ok := cache.status[node_]; ok {
-				info.mu.Lock()
-				if !isCanary {
-					_ = cache.respondDeltaWatches(ctx, info, snapshot, isCanary)
-				} else {
-					snap := &Snapshot{
-						Resources:  [10]Resources{},
-						VersionMap: cache.snapshots[node_].(*Snapshot).VersionMap,
-					}
-					snap.Resources[types.Endpoint] = currentResources
-					_ = cache.respondDeltaWatches(ctx, info, snap, isCanary)
-				}
-				info.mu.Unlock()
-			}
-		}
-	}
-
+func (cache *snapshotCache) DrainResources(ctx context.Context, opts *CustomSnapshotCacheOpts) error {
+	//cache.mu.Lock()
+	//defer cache.mu.Unlock()
+	//
+	//fmt.Printf("local DrainResources resource %v", resourcesToDrain)
+	//
+	//resourceToDelete := resourcesToDrain[0]
+	//resourceToDeleteParts := strings.Split(resourcesToDrain[0], "/")
+	//serviceName := resourceToDeleteParts[4]
+	//zone := resourceToDeleteParts[5]
+	//portString := strings.Split(resourcesToDrain[0], "_")[1]
+	//claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
+	//
+	//cache.log.Infof("DeleteResources claName=%s", claName)
+	//
+	//for node_, snapshot := range cache.snapshots {
+	//	didModify := false
+	//	currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
+	//	if rsc, found := currentResources.Items[claName]; found {
+	//		cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
+	//		for i, _ := range cla.Endpoints {
+	//			if cla.Endpoints[i].Locality.Zone == zone {
+	//				newEndpoints := make([]*endpoint.LbEndpoint, 0)
+	//				for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
+	//					if resourceToDelete == GetResourceName(lbEndpoint) {
+	//						didModify = true
+	//						cache.log.Infof("Drain and remove endpoint %s", resourceToDelete)
+	//
+	//						// Set to UNHEALTHY/DRAINING and let Envoy gracefully remove them.
+	//						lbEndpoint.HealthStatus = core.HealthStatus_DRAINING
+	//						// continue
+	//					}
+	//					newEndpoints = append(newEndpoints, lbEndpoint)
+	//				}
+	//
+	//				cla.Endpoints[i].LbEndpoints = newEndpoints
+	//			}
+	//		}
+	//
+	//		currentResources.Items[claName] = types.ResourceWithTTL{
+	//			Resource: cla,
+	//		}
+	//	}
+	//
+	//	if didModify {
+	//		// Update
+	//		currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+	//		currentVersion++
+	//		currentResources.Version = fmt.Sprintf("%d", currentVersion)
+	//
+	//		if !isCanary {
+	//			snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
+	//			cache.snapshots[node_] = snapshot
+	//		}
+	//
+	//		// Respond deltas
+	//		if info, ok := cache.status[node_]; ok {
+	//			info.mu.Lock()
+	//			if !isCanary {
+	//				_ = cache.respondDeltaWatches(ctx, info, snapshot, isCanary)
+	//			} else {
+	//				snap := &Snapshot{
+	//					Resources:  [10]Resources{},
+	//					VersionMap: cache.snapshots[node_].(*Snapshot).VersionMap,
+	//				}
+	//				snap.Resources[types.Endpoint] = currentResources
+	//				_ = cache.respondDeltaWatches(ctx, info, snap, isCanary)
+	//			}
+	//			info.mu.Unlock()
+	//		}
+	//	}
+	//}
+	//
 	return nil
 }
 
@@ -705,7 +708,11 @@ func (cache *snapshotCache) SetSnapshot(ctx context.Context, node string, snapsh
 		}
 
 		// Respond to delta watches for the node.
-		return cache.respondDeltaWatches(ctx, info, snapshot, false)
+		return cache.respondDeltaWatches(ctx, info, snapshot, &OperationOpts{
+			Id:                 "",
+			Checker:            nil,
+			AllowedNodesForOps: nil,
+		})
 	}
 
 	return nil
