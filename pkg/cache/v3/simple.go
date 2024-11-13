@@ -780,10 +780,11 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 		for _, key := range info.orderedDeltaWatches {
 			watch := info.deltaWatches[key.ID]
 
-			// Check if Checker allows to proceed
-			//if !ops.Checker(GetEnvoyNodeStr(watch.Request.GetNode()), ops) {
-			//	return nil
-			//}
+			//Check if Checker allows to proceed
+			nodeStr := GetEnvoyNodeStr(watch.Request.GetNode())
+			if ops != nil && ops.Checker != nil && !ops.Checker(nodeStr, ops) {
+				return nil
+			}
 
 			res, err := cache.respondDelta(
 				ctx,
@@ -804,9 +805,10 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 	} else {
 		for id, watch := range info.deltaWatches {
 			// Check if Checker allows to proceed
-			//if !ops.Checker(GetEnvoyNodeStr(watch.Request.GetNode()), ops) {
-			//	return nil
-			//}
+			nodeStr := GetEnvoyNodeStr(watch.Request.GetNode())
+			if ops != nil && ops.Checker != nil && !ops.Checker(nodeStr, ops) {
+				return nil
+			}
 			res, err := cache.respondDelta(
 				ctx,
 				snapshot,
