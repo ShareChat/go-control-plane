@@ -73,6 +73,7 @@ type CustomSnapshotCacheOpts struct {
 type OperationOpts struct {
 	Id                 string
 	Checker            func(nodestr string, ops *OperationOpts) bool
+	UpdatedSvcName     string
 	AllowedNodesForOps []string
 }
 
