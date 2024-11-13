@@ -67,7 +67,7 @@ type CustomSnapshotCacheOpts struct {
 	Resources         map[string]*types.ResourceWithTTL
 	ResourcesBatch    map[string]map[string]*types.ResourceWithTTL
 	ResourcesToRemove []string
-	Operation         OperationOpts
+	Operation         *OperationOpts
 }
 
 type OperationOpts struct {
@@ -315,7 +315,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, opts *Cust
 				info.mu.Lock()
 
 				// Respond to delta watches for the node.
-				err := cache.respondDeltaWatches(ctx, info, finalSnapshot, &opts.Operation)
+				err := cache.respondDeltaWatches(ctx, info, finalSnapshot, opts.Operation)
 				if err != nil {
 					info.mu.Unlock()
 					continue
@@ -404,7 +404,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, opts *CustomSna
 			defer info.mu.Unlock()
 
 			// Respond to delta watches for the node.
-			return cache.respondDeltaWatches(ctx, info, finalSnap, &opts.Operation)
+			return cache.respondDeltaWatches(ctx, info, finalSnap, opts.Operation)
 
 		}
 	} else {
@@ -495,7 +495,7 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, opts *Custom
 				defer info.mu.Unlock()
 
 				// Respond to delta watches for the node.
-				err := cache.respondDeltaWatches(ctx, info, finalSnap, &opts.Operation)
+				err := cache.respondDeltaWatches(ctx, info, finalSnap, opts.Operation)
 				if err != nil {
 					return
 				}
@@ -547,7 +547,7 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, opts *CustomSna
 			defer info.mu.Unlock()
 
 			// Respond to delta watches for the node.
-			return cache.respondDeltaWatches(ctx, info, finalSnap, &opts.Operation)
+			return cache.respondDeltaWatches(ctx, info, finalSnap, opts.Operation)
 		}
 
 	} else if opts.ResourceTypeUrl == resource.EndpointType {
@@ -604,7 +604,7 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, opts *CustomSna
 			// Respond deltas
 			if info, ok := cache.status[node_]; ok {
 				info.mu.Lock()
-				_ = cache.respondDeltaWatches(ctx, info, finalSnap, &opts.Operation)
+				_ = cache.respondDeltaWatches(ctx, info, finalSnap, opts.Operation)
 				info.mu.Unlock()
 			}
 		}
@@ -780,9 +780,9 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 			watch := info.deltaWatches[key.ID]
 
 			// Check if Checker allows to proceed
-			if !ops.Checker(GetEnvoyNodeStr(watch.Request.GetNode()), ops) {
-				return nil
-			}
+			//if !ops.Checker(GetEnvoyNodeStr(watch.Request.GetNode()), ops) {
+			//	return nil
+			//}
 
 			res, err := cache.respondDelta(
 				ctx,
@@ -803,9 +803,9 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 	} else {
 		for id, watch := range info.deltaWatches {
 			// Check if Checker allows to proceed
-			if !ops.Checker(GetEnvoyNodeStr(watch.Request.GetNode()), ops) {
-				return nil
-			}
+			//if !ops.Checker(GetEnvoyNodeStr(watch.Request.GetNode()), ops) {
+			//	return nil
+			//}
 			res, err := cache.respondDelta(
 				ctx,
 				snapshot,
