@@ -783,7 +783,7 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 			//Check if Checker allows to proceed
 			nodeStr := GetEnvoyNodeStr(watch.Request.GetNode())
 			if ops != nil && ops.Checker != nil && !ops.Checker(nodeStr, ops) {
-				return nil
+				continue
 			}
 
 			res, err := cache.respondDelta(
@@ -807,7 +807,7 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 			// Check if Checker allows to proceed
 			nodeStr := GetEnvoyNodeStr(watch.Request.GetNode())
 			if ops != nil && ops.Checker != nil && !ops.Checker(nodeStr, ops) {
-				return nil
+				continue
 			}
 			res, err := cache.respondDelta(
 				ctx,
