@@ -1016,6 +1016,9 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 			cache.log.Debugf("node: %s, sending delta response for typeURL %s with resources: %v removed resources: %v with wildcard: %t",
 				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
 		}
+		if value == nil {
+			return nil, nil
+		}
 		select {
 		case value <- resp:
 			return resp, nil
