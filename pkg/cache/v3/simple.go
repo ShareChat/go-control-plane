@@ -689,50 +689,52 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 		return nil
 	}
 
-	err := snapshot.ConstructVersionMap()
-	if err != nil {
-		return err
-	}
-
-	// If ADS is enabled we need to order response delta watches so we guarantee
-	// sending them in the correct order. Go's default implementation
-	// of maps are randomized order when ranged over.
-	if cache.ads {
-		info.orderResponseDeltaWatches()
-		for _, key := range info.orderedDeltaWatches {
-			watch := info.deltaWatches[key.ID]
-			res, err := cache.respondDelta(
-				ctx,
-				snapshot,
-				watch.Request,
-				watch.Response,
-				watch.StreamState,
-			)
-			if err != nil {
-				return err
-			}
-			// If we detect a nil response here, that means there has been no state change
-			// so we don't want to respond or remove any existing resource watches
-			if res != nil {
-				delete(info.deltaWatches, key.ID)
-			}
+	if snapshot != nil {
+		err := snapshot.ConstructVersionMap()
+		if err != nil {
+			return err
 		}
-	} else {
-		for id, watch := range info.deltaWatches {
-			res, err := cache.respondDelta(
-				ctx,
-				snapshot,
-				watch.Request,
-				watch.Response,
-				watch.StreamState,
-			)
-			if err != nil {
-				return err
+
+		// If ADS is enabled we need to order response delta watches so we guarantee
+		// sending them in the correct order. Go's default implementation
+		// of maps are randomized order when ranged over.
+		if cache.ads {
+			info.orderResponseDeltaWatches()
+			for _, key := range info.orderedDeltaWatches {
+				watch := info.deltaWatches[key.ID]
+				res, err := cache.respondDelta(
+					ctx,
+					snapshot,
+					watch.Request,
+					watch.Response,
+					watch.StreamState,
+				)
+				if err != nil {
+					return err
+				}
+				// If we detect a nil response here, that means there has been no state change
+				// so we don't want to respond or remove any existing resource watches
+				if res != nil {
+					delete(info.deltaWatches, key.ID)
+				}
 			}
-			// If we detect a nil response here, that means there has been no state change
-			// so we don't want to respond or remove any existing resource watches
-			if res != nil {
-				delete(info.deltaWatches, id)
+		} else {
+			for id, watch := range info.deltaWatches {
+				res, err := cache.respondDelta(
+					ctx,
+					snapshot,
+					watch.Request,
+					watch.Response,
+					watch.StreamState,
+				)
+				if err != nil {
+					return err
+				}
+				// If we detect a nil response here, that means there has been no state change
+				// so we don't want to respond or remove any existing resource watches
+				if res != nil {
+					delete(info.deltaWatches, id)
+				}
 			}
 		}
 	}
@@ -999,37 +1001,39 @@ func GetEnvoyNodeStr(node *core.Node) string {
 
 // Respond to a delta watch with the provided snapshot value. If the response is nil, there has been no state change.
 func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceSnapshot, request *DeltaRequest, value chan DeltaResponse, state stream.StreamState) (*RawDeltaResponse, error) {
-	resp := createDeltaResponse(ctx, request, state, resourceContainer{
-		resourceMap:   snapshot.GetResourcesAndTTL(request.GetTypeUrl()),
-		versionMap:    snapshot.GetVersionMap(request.GetTypeUrl()),
-		systemVersion: snapshot.GetVersion(request.GetTypeUrl()),
-	})
+	if snapshot != nil {
+		resp := createDeltaResponse(ctx, request, state, resourceContainer{
+			resourceMap:   snapshot.GetResourcesAndTTL(request.GetTypeUrl()),
+			versionMap:    snapshot.GetVersionMap(request.GetTypeUrl()),
+			systemVersion: snapshot.GetVersion(request.GetTypeUrl()),
+		})
 
-	// Only send a response if there were changes
-	// We want to respond immediately for the first wildcard request in a stream, even if the response is empty
-	// otherwise, envoy won't complete initialization
-	if len(resp.Resources) > 0 || len(resp.RemovedResources) > 0 || (state.IsFirst()) {
+		// Only send a response if there were changes
+		// We want to respond immediately for the first wildcard request in a stream, even if the response is empty
+		// otherwise, envoy won't complete initialization
+		if len(resp.Resources) > 0 || len(resp.RemovedResources) > 0 || (state.IsFirst()) {
 
-		fmt.Printf("will respond: %d resources, typeUrl=%s\n", len(resp.Resources)+len(resp.RemovedResources), request.GetTypeUrl())
+			fmt.Printf("will respond: %d resources, typeUrl=%s\n", len(resp.Resources)+len(resp.RemovedResources), request.GetTypeUrl())
 
-		if cache.log != nil {
-			cache.log.Debugf("node: %s, sending delta response for typeURL %s with resources: %v removed resources: %v with wildcard: %t",
-				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
-		}
-
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Println("Tried to send on a closed channel")
+			if cache.log != nil {
+				cache.log.Debugf("node: %s, sending delta response for typeURL %s with resources: %v removed resources: %v with wildcard: %t",
+					request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
 			}
-		}()
-		select {
-		case value <- resp:
-			return resp, nil
-		case <-ctx.Done():
-			return resp, context.Canceled
+
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Println("Tried to send on a closed channel")
+				}
+			}()
+			select {
+			case value <- resp:
+				return resp, nil
+			case <-ctx.Done():
+				return resp, context.Canceled
+			}
+		} else {
+			fmt.Printf("will respond NOT: %d resources, typeUrl=%s\n", len(resp.Resources)+len(resp.RemovedResources), request.GetTypeUrl())
 		}
-	} else {
-		fmt.Printf("will respond NOT: %d resources, typeUrl=%s\n", len(resp.Resources)+len(resp.RemovedResources), request.GetTypeUrl())
 	}
 	return nil, nil
 }
