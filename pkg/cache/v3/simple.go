@@ -253,8 +253,8 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
 
 			if currentResources.Items == nil {
-				// Fresh resources
-				currentResources.Items = make(map[string]VTMarshaledResource)
+				// No resources exist for the typeUrl, and since BatchUpsert handles only updates we return.
+				return nil
 			}
 
 			for name, r := range resourcesUpserted {
