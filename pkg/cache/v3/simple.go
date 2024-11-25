@@ -253,8 +253,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
 
 			if currentResources.Items == nil {
-				// No resources exist for the typeUrl, and since BatchUpsert handles only updates we return.
-				return nil
+				currentResources.Items = make(map[string]VTMarshaledResource)
 			}
 
 			for name, r := range resourcesUpserted {
@@ -293,29 +292,29 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 				info.mu.Unlock()
 			}
 		} else {
-			//resources := make(map[resource.Type][]types.ResourceWithTTL)
-			//resources[typ] = make([]types.ResourceWithTTL, 0)
-			//for _, r := range resourcesUpserted {
-			//	resources[typ] = append(resources[typ], *r)
-			//}
-			//s, err := NewSnapshotWithTTLs("0", resources)
-			//if err != nil {
-			//	continue
-			//}
-			//cache.snapshots[node] = s
-			//
-			//// Respond deltas
-			//if info, ok := cache.status[node]; ok {
-			//	info.mu.Lock()
-			//
-			//	// Respond to delta watches for the node.
-			//	err := cache.respondDeltaWatches(ctx, info, snapshot)
-			//	if err != nil {
-			//		info.mu.Unlock()
-			//		continue
-			//	}
-			//	info.mu.Unlock()
-			//}
+			resources := make(map[resource.Type][]types.ResourceWithTTL)
+			resources[typ] = make([]types.ResourceWithTTL, 0)
+			for _, r := range resourcesUpserted {
+				resources[typ] = append(resources[typ], *r)
+			}
+			s, err := NewSnapshotWithTTLs("0", resources)
+			if err != nil {
+				continue
+			}
+			cache.snapshots[node] = s
+
+			// Respond deltas
+			if info, ok := cache.status[node]; ok {
+				info.mu.Lock()
+
+				// Respond to delta watches for the node.
+				err := cache.respondDeltaWatches(ctx, info, snapshot)
+				if err != nil {
+					info.mu.Unlock()
+					continue
+				}
+				info.mu.Unlock()
+			}
 		}
 	}
 
