@@ -1000,10 +1000,6 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 		systemVersion: snapshot.GetVersion(request.GetTypeUrl()),
 	})
 
-	if request.GetTypeUrl() == "type.googleapis.com/envoy.config.listener.v3.Listener" {
-		fmt.Println("resp.Resources", len(resp.Resources))
-	}
-
 	// Only send a response if there were changes
 	// We want to respond immediately for the first wildcard request in a stream, even if the response is empty
 	// otherwise, envoy won't complete initialization

@@ -17,7 +17,6 @@ package cache
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -241,13 +240,11 @@ func (r *RawDeltaResponse) GetDeltaDiscoveryResponse() (*discovery.DeltaDiscover
 		for _, resource := range r.Resources {
 			name := resource.Name
 			if name == "" {
-				fmt.Println("name is empty", r.GetDeltaRequest().GetTypeUrl(), resource)
 				continue
 			}
 
 			if resource.Version == "" {
-				fmt.Println("version is empty", r.GetDeltaRequest().GetTypeUrl(), resource)
-				return nil, errors.New("failed to get a resource hash")
+				continue
 			}
 			marshaledResources = append(marshaledResources, &discovery.Resource{
 				Name: name,
