@@ -17,12 +17,13 @@ package cache
 import (
 	"context"
 	"fmt"
-	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
-	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/log"
@@ -944,12 +945,13 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 		if err != nil {
 			cache.log.Errorf("failed to compute version for snapshot resources inline: %s", err)
 		}
-		response, err = cache.respondDelta(context.Background(), snapshot, request, value, state)
-		if err != nil {
-			cache.log.Errorf("failed to respond with delta response: %s", err)
-		}
-
 		delayedResponse = (response == nil) || (len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) == 0)
+		if !delayedResponse {
+			response, err = cache.respondDelta(context.Background(), snapshot, request, value, state)
+			if err != nil {
+				cache.log.Errorf("failed to respond with delta response: %s", err)
+			}
+		}
 	}
 
 	if delayedResponse {
@@ -997,6 +999,10 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 		versionMap:    snapshot.GetVersionMap(request.GetTypeUrl()),
 		systemVersion: snapshot.GetVersion(request.GetTypeUrl()),
 	})
+
+	if request.GetTypeUrl() == "type.googleapis.com/envoy.config.listener.v3.Listener" {
+		fmt.Println("resp.Resources", len(resp.Resources))
+	}
 
 	// Only send a response if there were changes
 	// We want to respond immediately for the first wildcard request in a stream, even if the response is empty

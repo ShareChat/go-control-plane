@@ -83,7 +83,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 	switch {
 	case state.IsWildcard():
 		filtered = make(map[string]VTMarshaledResource)
-		nextVersionMap = make(map[string]string, len(resources.resourceMap))
+		nextVersionMap = make(map[string]string, 0)
 		for name, r := range resources.resourceMap {
 			// Since we've already precomputed the version hashes of the new snapshot,
 			// we can just set it here to be used for comparison later
@@ -104,7 +104,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 		}
 	default:
 		filtered = make(map[string]VTMarshaledResource)
-		nextVersionMap = make(map[string]string, len(state.GetSubscribedResourceNames()))
+		nextVersionMap = make(map[string]string, 0)
 		// state.GetResourceVersions() may include resources no longer subscribed
 		// In the current code this gets silently cleaned when updating the version map
 		for name := range state.GetSubscribedResourceNames() {
@@ -142,8 +142,8 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 		}
 	}
 
-	filteredResources := make([]VTMarshaledResource, len(filtered))
-	filteredResourceNames := make([]string, len(filtered))
+	filteredResources := make([]VTMarshaledResource, 0)
+	filteredResourceNames := make([]string, 0)
 	for name, r := range filtered {
 		filteredResources = append(filteredResources, r)
 		filteredResourceNames = append(filteredResourceNames, name)
