@@ -309,7 +309,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 				info.mu.Lock()
 
 				// Respond to delta watches for the node.
-				err := cache.respondDeltaWatches(ctx, info, snapshot)
+				err := cache.respondDeltaWatches(ctx, info, s)
 				if err != nil {
 					info.mu.Unlock()
 					continue
