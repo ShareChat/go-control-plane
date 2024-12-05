@@ -939,41 +939,40 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// - a snapshot exists, but we failed to initialize its version map
 	// - we attempted to issue a response, but the caller is already up to date
 	delayedResponse := !exists
-	var response *RawDeltaResponse = nil
+	resourcesLength := 0
 	if exists {
 		err := snapshot.ConstructVersionMap()
 		if err != nil {
 			cache.log.Errorf("failed to compute version for snapshot resources inline: %s", err)
 		}
-		delayedResponse = (response == nil) || (len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) == 0)
+		response, err := cache.respondDelta(context.Background(), snapshot, request, value, state)
+		if err != nil {
+			cache.log.Errorf("failed to respond with delta response: %s", err)
+		}
+		delayedResponse = response == nil
 		if !delayedResponse {
-			response, err = cache.respondDelta(context.Background(), snapshot, request, value, state)
-			if err != nil {
-				cache.log.Errorf("failed to respond with delta response: %s", err)
+			versionMap := snapshot.GetVersionMap(request.GetTypeUrl())
+			if versionMap != nil {
+				resourcesLength = len(versionMap)
 			}
 		}
 	}
 
 	if delayedResponse {
 		watchID := cache.nextDeltaWatchID()
-		info.setDeltaResponseWatch(watchID, DeltaResponseWatch{Request: request, Response: value, StreamState: state})
-
-		lenResources := 0
 
 		if exists {
-			resources := snapshot.GetResources(request.GetTypeUrl())
-			if resources != nil {
-				lenResources = len(resources)
-			}
 			cache.log.Infof("open delta watch ID:%d for %s Resources:%v from nodeID: %q,  version %q", watchID, t, state.GetSubscribedResourceNames(), nodeID, snapshot.GetVersion(t))
-			return cache.cancelDeltaWatch(nodeID, watchID), lenResources == 0
 		} else {
 			cache.log.Infof("open delta watch ID:%d for %s Resources:%v from nodeID: %q", watchID, t, state.GetSubscribedResourceNames(), nodeID)
-			return cache.cancelDeltaWatch(nodeID, watchID), true
 		}
-	}
 
-	return nil, false
+		info.setDeltaResponseWatch(watchID, DeltaResponseWatch{Request: request, Response: value, StreamState: state})
+		return cache.cancelDeltaWatch(nodeID, watchID), true
+	} else {
+		watchID := cache.nextDeltaWatchID()
+		return cache.cancelDeltaWatch(nodeID, watchID), resourcesLength == 0
+	}
 }
 
 func GetEnvoyNodeStr(node *core.Node) string {
