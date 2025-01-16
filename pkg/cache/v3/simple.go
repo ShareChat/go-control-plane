@@ -326,7 +326,6 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 
 func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL) error {
 	cache.mu.Lock()
-	// fmt.Printf("UpsertResources node %s, typ %s, resourcesUpserted %v\n", node, typ, resourcesUpserted)
 	if snapshot, ok := cache.snapshots[node]; ok {
 		defer cache.mu.Unlock()
 		// Add new/updated resources to the Resources map
@@ -494,119 +493,12 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 			return cache.respondDeltaWatches(ctx, info, snapshot)
 		}
 
-	} else if typ == resource.EndpointType {
-		//resourceToDelete := resourcesToDeleted[0]
-		//resourceToDeleteParts := strings.Split(resourcesToDeleted[0], "/")
-		//serviceName := resourceToDeleteParts[4]
-		//zone := resourceToDeleteParts[5]
-		//portString := strings.Split(resourcesToDeleted[0], "_")[1]
-		//claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
-		//
-		//for node_, snapshot := range cache.snapshots {
-		//	currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
-		//	if rsc, found := currentResources.Items[claName]; found {
-		//		cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
-		//		for i, _ := range cla.Endpoints {
-		//			if cla.Endpoints[i].Locality.Zone == zone {
-		//				newEndpoints := make([]*endpoint.LbEndpoint, 0)
-		//				for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
-		//					if resourceToDelete == GetResourceName(lbEndpoint) {
-		//						continue
-		//					}
-		//					newEndpoints = append(newEndpoints, lbEndpoint)
-		//				}
-		//
-		//				cla.Endpoints[i].LbEndpoints = newEndpoints
-		//			}
-		//		}
-		//
-		//		currentResources.Items[claName] = types.ResourceWithTTL{
-		//			Resource: cla,
-		//		}
-		//	}
-		//
-		//	// Update
-		//	currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
-		//	currentVersion++
-		//	currentResources.Version = fmt.Sprintf("%d", currentVersion)
-		//
-		//	snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
-		//	cache.snapshots[node_] = snapshot
-		//
-		//	// Respond deltas
-		//	if info, ok := cache.status[node_]; ok {
-		//		info.mu.Lock()
-		//		_ = cache.respondDeltaWatches(ctx, info, snapshot)
-		//		info.mu.Unlock()
-		//	}
-		//}
 	}
 
 	return nil
 }
 
 func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ string, resourcesToDrain []string) error {
-	//cache.mu.Lock()
-	//defer cache.mu.Unlock()
-	//
-	//fmt.Printf("local DrainResources resource %v", resourcesToDrain)
-	//
-	//resourceToDelete := resourcesToDrain[0]
-	//resourceToDeleteParts := strings.Split(resourcesToDrain[0], "/")
-	//serviceName := resourceToDeleteParts[4]
-	//zone := resourceToDeleteParts[5]
-	//portString := strings.Split(resourcesToDrain[0], "_")[1]
-	//claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
-	//
-	//cache.log.Infof("DeleteResources claName=%s", claName)
-	//
-	//for node_, snapshot := range cache.snapshots {
-	//	didModify := false
-	//	currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
-	//	if rsc, found := currentResources.Items[claName]; found {
-	//		cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
-	//		for i, _ := range cla.Endpoints {
-	//			if cla.Endpoints[i].Locality.Zone == zone {
-	//				newEndpoints := make([]*endpoint.LbEndpoint, 0)
-	//				for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
-	//					if resourceToDelete == GetResourceName(lbEndpoint) {
-	//						didModify = true
-	//						cache.log.Infof("Drain and remove endpoint %s", resourceToDelete)
-	//
-	//						// Set to UNHEALTHY/DRAINING and let Envoy gracefully remove them.
-	//						lbEndpoint.HealthStatus = core.HealthStatus_DRAINING
-	//						// continue
-	//					}
-	//					newEndpoints = append(newEndpoints, lbEndpoint)
-	//				}
-	//
-	//				cla.Endpoints[i].LbEndpoints = newEndpoints
-	//			}
-	//		}
-	//
-	//		currentResources.Items[claName] = types.ResourceWithTTL{
-	//			Resource: cla,
-	//		}
-	//	}
-	//
-	//	if didModify {
-	//		// Update
-	//		currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
-	//		currentVersion++
-	//		currentResources.Version = fmt.Sprintf("%d", currentVersion)
-	//
-	//		snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
-	//		cache.snapshots[node_] = snapshot
-	//
-	//		// Respond deltas
-	//		if info, ok := cache.status[node_]; ok {
-	//			info.mu.Lock()
-	//			_ = cache.respondDeltaWatches(ctx, info, snapshot)
-	//			info.mu.Unlock()
-	//		}
-	//	}
-	//}
-
 	return nil
 }
 
@@ -916,7 +808,6 @@ func createResponse(ctx context.Context, request *Request, resources map[string]
 
 func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) (func(), bool) {
 	nodeID := cache.hash.ID(request.GetNode())
-	// fmt.Printf("CreateDeltaWatch node %s, typ %s\n", nodeID, request.GetTypeUrl())
 	t := request.GetTypeUrl()
 
 	cache.mu.Lock()

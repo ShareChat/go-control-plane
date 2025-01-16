@@ -129,8 +129,6 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 		filteredResourceNames = append(filteredResourceNames, f.Name)
 	}
 
-	// fmt.Printf("type %s, state %v filtered %v toRemove %v versionMap %v\n", req.GetTypeUrl(), state.GetResourceVersions(), filteredResourceNames, toRemove, resources.versionMap)
-
 	return &RawDeltaResponse{
 		DeltaRequest:      req,
 		Resources:         filtered,
