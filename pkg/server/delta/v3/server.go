@@ -218,7 +218,7 @@ func (s *server) processDelta(str stream.DeltaStream, reqCh <-chan *discovery.De
 			s.subscribe(req.GetResourceNamesSubscribe(), &watch.state)
 			s.unsubscribe(req.GetResourceNamesUnsubscribe(), &watch.state)
 
-			watch.cancel = s.cache.CreateDeltaWatch(req, watch.state, watches.deltaMuxedResponses)
+			watch.cancel, _ = s.cache.CreateDeltaWatch(req, watch.state, watches.deltaMuxedResponses)
 			watches.deltaWatches[typeURL] = watch
 		}
 	}
