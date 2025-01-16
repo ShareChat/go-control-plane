@@ -326,7 +326,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 
 func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL) error {
 	cache.mu.Lock()
-	fmt.Printf("UpsertResources node %s, typ %s, resourcesUpserted %v\n", node, typ, resourcesUpserted)
+	// fmt.Printf("UpsertResources node %s, typ %s, resourcesUpserted %v\n", node, typ, resourcesUpserted)
 	if snapshot, ok := cache.snapshots[node]; ok {
 		defer cache.mu.Unlock()
 		// Add new/updated resources to the Resources map
@@ -916,7 +916,7 @@ func createResponse(ctx context.Context, request *Request, resources map[string]
 
 func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) (func(), bool) {
 	nodeID := cache.hash.ID(request.GetNode())
-	fmt.Printf("CreateDeltaWatch node %s, typ %s\n", nodeID, request.GetTypeUrl())
+	// fmt.Printf("CreateDeltaWatch node %s, typ %s\n", nodeID, request.GetTypeUrl())
 	t := request.GetTypeUrl()
 
 	cache.mu.Lock()
