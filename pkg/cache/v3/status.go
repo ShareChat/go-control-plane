@@ -27,6 +27,8 @@ import (
 type NodeHash interface {
 	// ID function defines a unique string identifier for the remote Envoy node.
 	ID(node *core.Node) string
+	CacheIndex(node *core.Node) int
+	CacheIndexFromKey(key string) int
 }
 
 // IDHash uses ID field as the node hash.
@@ -38,6 +40,21 @@ func (IDHash) ID(node *core.Node) string {
 		return ""
 	}
 	return node.GetId()
+}
+
+// CacheIndex returns the index of the node in the cache.
+// Don't use this default implementation, write your own CacheIndex function.
+func (IDHash) CacheIndex(node *core.Node) int {
+	if node == nil {
+		return 0
+	}
+	return len(node.GetId())
+}
+
+// CacheIndexFromKey returns the index of the node in the cache.
+// Don't use this default implementation, write your own CacheIndex function.
+func (IDHash) CacheIndexFromKey(key string) int {
+	return len(key)
 }
 
 var _ NodeHash = IDHash{}
