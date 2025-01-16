@@ -244,6 +244,12 @@ func (cache *snapshotCache) ParseSystemVersionInfo(version string) int64 {
 }
 
 func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string, batchResourcesUpserted map[string]map[string]*types.ResourceWithTTL) error {
+	start := time.Now()
+	size := len(batchResourcesUpserted)
+	defer func() {
+		elapsed := time.Since(start)
+		fmt.Printf("BatchUpsertResources took %s for %d nodes\n", elapsed, size)
+	}()
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	for node, resourcesUpserted := range batchResourcesUpserted {
@@ -585,6 +591,7 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 	// of maps are randomized order when ranged over.
 	if cache.ads {
 		info.orderResponseDeltaWatches()
+		start := time.Now()
 		for _, key := range info.orderedDeltaWatches {
 			watch := info.deltaWatches[key.ID]
 			res, err := cache.respondDelta(
@@ -603,6 +610,8 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 				delete(info.deltaWatches, key.ID)
 			}
 		}
+		elapsed := time.Since(start)
+		fmt.Printf("respondDeltaWatches took %s for %d watches\n", elapsed, len(info.orderedDeltaWatches))
 	} else {
 		for id, watch := range info.deltaWatches {
 			res, err := cache.respondDelta(
