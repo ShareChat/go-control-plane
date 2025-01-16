@@ -254,7 +254,9 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
 
 			if currentResources.Items == nil {
-				currentResources.Items = make(map[string]VTMarshaledResource)
+				// Batched resource are not state of the world. It is the delta resources.
+				// Only put state of the world items in the resources map.
+				return nil
 			}
 
 			for name, r := range resourcesUpserted {
@@ -293,29 +295,29 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 				info.mu.Unlock()
 			}
 		} else {
-			resources := make(map[resource.Type][]types.ResourceWithTTL)
-			resources[typ] = make([]types.ResourceWithTTL, 0)
-			for _, r := range resourcesUpserted {
-				resources[typ] = append(resources[typ], *r)
-			}
-			s, err := NewSnapshotWithTTLs("0", resources)
-			if err != nil {
-				continue
-			}
-			cache.snapshots[node] = s
+			// resources := make(map[resource.Type][]types.ResourceWithTTL)
+			// resources[typ] = make([]types.ResourceWithTTL, 0)
+			// for _, r := range resourcesUpserted {
+			// 	resources[typ] = append(resources[typ], *r)
+			// }
+			// s, err := NewSnapshotWithTTLs("0", resources)
+			// if err != nil {
+			// 	continue
+			// }
+			// cache.snapshots[node] = s
 
-			// Respond deltas
-			if info, ok := cache.status[node]; ok {
-				info.mu.Lock()
+			// // Respond deltas
+			// if info, ok := cache.status[node]; ok {
+			// 	info.mu.Lock()
 
-				// Respond to delta watches for the node.
-				err := cache.respondDeltaWatches(ctx, info, s)
-				if err != nil {
-					info.mu.Unlock()
-					continue
-				}
-				info.mu.Unlock()
-			}
+			// 	// Respond to delta watches for the node.
+			// 	err := cache.respondDeltaWatches(ctx, info, s)
+			// 	if err != nil {
+			// 		info.mu.Unlock()
+			// 		continue
+			// 	}
+			// 	info.mu.Unlock()
+			// }
 		}
 	}
 
@@ -334,6 +336,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 		if currentResources.Items == nil {
 			// Fresh resources
 			currentResources.Items = make(map[string]VTMarshaledResource)
+			currentVersion = 0
 		}
 
 		for name, r := range resourcesUpserted {
@@ -367,22 +370,18 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 			return cache.respondDeltaWatches(ctx, info, snapshot)
 		}
 	} else {
-		cache.mu.Unlock()
+		// Snapshot is not found. Create a new snapshot with these new resources.
 		resources := make(map[resource.Type][]types.ResourceWithTTL)
 		resources[typ] = make([]types.ResourceWithTTL, 0)
 		for _, r := range resourcesUpserted {
-			//if typ == resource.EndpointType {
-			//	cla := r.Resource.(*endpoint.ClusterLoadAssignment)
-			//	if len(cla.Endpoints) == 0 {
-			//		log2.Info().Msgf("UpsertResources: Writing claname=%s endpoints=%d", cla.ClusterName, len(cla.Endpoints))
-			//	}
-			//}
 			resources[typ] = append(resources[typ], *r)
 		}
 		s, err := NewSnapshotWithTTLs("0", resources)
 		if err != nil {
 			return err
 		}
+
+		cache.mu.Unlock()
 		err = cache.SetSnapshot(ctx, node, s)
 		if err != nil {
 			return err
@@ -494,119 +493,12 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 			return cache.respondDeltaWatches(ctx, info, snapshot)
 		}
 
-	} else if typ == resource.EndpointType {
-		//resourceToDelete := resourcesToDeleted[0]
-		//resourceToDeleteParts := strings.Split(resourcesToDeleted[0], "/")
-		//serviceName := resourceToDeleteParts[4]
-		//zone := resourceToDeleteParts[5]
-		//portString := strings.Split(resourcesToDeleted[0], "_")[1]
-		//claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
-		//
-		//for node_, snapshot := range cache.snapshots {
-		//	currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
-		//	if rsc, found := currentResources.Items[claName]; found {
-		//		cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
-		//		for i, _ := range cla.Endpoints {
-		//			if cla.Endpoints[i].Locality.Zone == zone {
-		//				newEndpoints := make([]*endpoint.LbEndpoint, 0)
-		//				for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
-		//					if resourceToDelete == GetResourceName(lbEndpoint) {
-		//						continue
-		//					}
-		//					newEndpoints = append(newEndpoints, lbEndpoint)
-		//				}
-		//
-		//				cla.Endpoints[i].LbEndpoints = newEndpoints
-		//			}
-		//		}
-		//
-		//		currentResources.Items[claName] = types.ResourceWithTTL{
-		//			Resource: cla,
-		//		}
-		//	}
-		//
-		//	// Update
-		//	currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
-		//	currentVersion++
-		//	currentResources.Version = fmt.Sprintf("%d", currentVersion)
-		//
-		//	snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
-		//	cache.snapshots[node_] = snapshot
-		//
-		//	// Respond deltas
-		//	if info, ok := cache.status[node_]; ok {
-		//		info.mu.Lock()
-		//		_ = cache.respondDeltaWatches(ctx, info, snapshot)
-		//		info.mu.Unlock()
-		//	}
-		//}
 	}
 
 	return nil
 }
 
 func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ string, resourcesToDrain []string) error {
-	//cache.mu.Lock()
-	//defer cache.mu.Unlock()
-	//
-	//fmt.Printf("local DrainResources resource %v", resourcesToDrain)
-	//
-	//resourceToDelete := resourcesToDrain[0]
-	//resourceToDeleteParts := strings.Split(resourcesToDrain[0], "/")
-	//serviceName := resourceToDeleteParts[4]
-	//zone := resourceToDeleteParts[5]
-	//portString := strings.Split(resourcesToDrain[0], "_")[1]
-	//claName := fmt.Sprintf("xdstp://nexus/%s/%s/%s", strings.Split(resource.EndpointType, "/")[1], serviceName, portString)
-	//
-	//cache.log.Infof("DeleteResources claName=%s", claName)
-	//
-	//for node_, snapshot := range cache.snapshots {
-	//	didModify := false
-	//	currentResources := snapshot.(*Snapshot).Resources[types.Endpoint]
-	//	if rsc, found := currentResources.Items[claName]; found {
-	//		cla := rsc.Resource.(*endpoint.ClusterLoadAssignment)
-	//		for i, _ := range cla.Endpoints {
-	//			if cla.Endpoints[i].Locality.Zone == zone {
-	//				newEndpoints := make([]*endpoint.LbEndpoint, 0)
-	//				for _, lbEndpoint := range cla.Endpoints[i].LbEndpoints {
-	//					if resourceToDelete == GetResourceName(lbEndpoint) {
-	//						didModify = true
-	//						cache.log.Infof("Drain and remove endpoint %s", resourceToDelete)
-	//
-	//						// Set to UNHEALTHY/DRAINING and let Envoy gracefully remove them.
-	//						lbEndpoint.HealthStatus = core.HealthStatus_DRAINING
-	//						// continue
-	//					}
-	//					newEndpoints = append(newEndpoints, lbEndpoint)
-	//				}
-	//
-	//				cla.Endpoints[i].LbEndpoints = newEndpoints
-	//			}
-	//		}
-	//
-	//		currentResources.Items[claName] = types.ResourceWithTTL{
-	//			Resource: cla,
-	//		}
-	//	}
-	//
-	//	if didModify {
-	//		// Update
-	//		currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
-	//		currentVersion++
-	//		currentResources.Version = fmt.Sprintf("%d", currentVersion)
-	//
-	//		snapshot.(*Snapshot).Resources[types.Endpoint] = currentResources
-	//		cache.snapshots[node_] = snapshot
-	//
-	//		// Respond deltas
-	//		if info, ok := cache.status[node_]; ok {
-	//			info.mu.Lock()
-	//			_ = cache.respondDeltaWatches(ctx, info, snapshot)
-	//			info.mu.Unlock()
-	//		}
-	//	}
-	//}
-
 	return nil
 }
 
@@ -914,7 +806,6 @@ func createResponse(ctx context.Context, request *Request, resources map[string]
 	}
 }
 
-// CreateDeltaWatch returns a watch for a delta xDS request which implements the Simple SnapshotCache.
 func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream.StreamState, value chan DeltaResponse) (func(), bool) {
 	nodeID := cache.hash.ID(request.GetNode())
 	t := request.GetTypeUrl()
@@ -939,7 +830,6 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// - a snapshot exists, but we failed to initialize its version map
 	// - we attempted to issue a response, but the caller is already up to date
 	delayedResponse := !exists
-	resourcesLength := 0
 	if exists {
 		err := snapshot.ConstructVersionMap()
 		if err != nil {
@@ -949,13 +839,8 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 		if err != nil {
 			cache.log.Errorf("failed to respond with delta response: %s", err)
 		}
+
 		delayedResponse = response == nil
-		if !delayedResponse {
-			versionMap := snapshot.GetVersionMap(request.GetTypeUrl())
-			if versionMap != nil {
-				resourcesLength = len(versionMap)
-			}
-		}
 	}
 
 	if delayedResponse {
@@ -968,11 +853,10 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 		}
 
 		info.setDeltaResponseWatch(watchID, DeltaResponseWatch{Request: request, Response: value, StreamState: state})
-		return cache.cancelDeltaWatch(nodeID, watchID), true
-	} else {
-		watchID := cache.nextDeltaWatchID()
-		return cache.cancelDeltaWatch(nodeID, watchID), resourcesLength == 0
+		return cache.cancelDeltaWatch(nodeID, watchID), delayedResponse
 	}
+
+	return nil, false
 }
 
 func GetEnvoyNodeStr(node *core.Node) string {

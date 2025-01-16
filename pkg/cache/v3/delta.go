@@ -78,12 +78,16 @@ func containsPrefixedKeyResources(data map[string]VTMarshaledResource, keyLike s
 func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.StreamState, resources resourceContainer) *RawDeltaResponse {
 	// variables to build our response with
 	var nextVersionMap map[string]string
-	var filtered map[string]VTMarshaledResource
+	var filtered []VTMarshaledResource
 	var toRemove []string
+
+	// If we are handling a wildcard request, we want to respond with all resources
 	switch {
 	case state.IsWildcard():
-		filtered = make(map[string]VTMarshaledResource)
-		nextVersionMap = make(map[string]string, 0)
+		if len(state.GetResourceVersions()) == 0 {
+			filtered = make([]VTMarshaledResource, 0, len(resources.resourceMap))
+		}
+		nextVersionMap = make(map[string]string, len(resources.resourceMap))
 		for name, r := range resources.resourceMap {
 			// Since we've already precomputed the version hashes of the new snapshot,
 			// we can just set it here to be used for comparison later
@@ -91,7 +95,7 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 			nextVersionMap[name] = version
 			prevVersion, found := state.GetResourceVersions()[name]
 			if !found || (prevVersion != version) {
-				filtered[name] = r
+				filtered = append(filtered, r)
 			}
 		}
 
@@ -103,55 +107,31 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 			}
 		}
 	default:
-		filtered = make(map[string]VTMarshaledResource)
-		nextVersionMap = make(map[string]string, 0)
+		nextVersionMap = make(map[string]string, len(state.GetSubscribedResourceNames()))
 		// state.GetResourceVersions() may include resources no longer subscribed
 		// In the current code this gets silently cleaned when updating the version map
 		for name := range state.GetSubscribedResourceNames() {
-			dirResourceName := name
-			if strings.Contains(dirResourceName, "*") {
-				dirResourceName = strings.Split(dirResourceName, "*")[0]
-				prevVersions, _ := containsPrefixedKey(state.GetResourceVersions(), dirResourceName)
-				currVersions, _ := containsPrefixedKeyResources(resources.resourceMap, dirResourceName)
-				combinedVersions := combineUnique(prevVersions, currVersions)
-
-				for _, versionName := range combinedVersions {
-					prevVersion, found := state.GetResourceVersions()[versionName]
-					if r, ok := resources.resourceMap[versionName]; ok {
-						nextVersion := resources.versionMap[versionName]
-						if prevVersion != nextVersion {
-							filtered[r.Name] = r
-						}
-						nextVersionMap[versionName] = nextVersion
-					} else if found {
-						toRemove = append(toRemove, versionName)
-					}
+			prevVersion, found := state.GetResourceVersions()[name]
+			if r, ok := resources.resourceMap[name]; ok {
+				nextVersion := resources.versionMap[name]
+				if prevVersion != nextVersion {
+					filtered = append(filtered, r)
 				}
-			} else {
-				prevVersion, found := state.GetResourceVersions()[name]
-				if r, ok := resources.resourceMap[name]; ok {
-					nextVersion := resources.versionMap[name]
-					if prevVersion != nextVersion {
-						filtered[r.Name] = r
-					}
-					nextVersionMap[name] = nextVersion
-				} else if found {
-					toRemove = append(toRemove, name)
-				}
+				nextVersionMap[name] = nextVersion
+			} else if found {
+				toRemove = append(toRemove, name)
 			}
 		}
 	}
 
-	filteredResources := make([]VTMarshaledResource, 0)
 	filteredResourceNames := make([]string, 0)
-	for name, r := range filtered {
-		filteredResources = append(filteredResources, r)
-		filteredResourceNames = append(filteredResourceNames, name)
+	for _, f := range filtered {
+		filteredResourceNames = append(filteredResourceNames, f.Name)
 	}
 
 	return &RawDeltaResponse{
 		DeltaRequest:      req,
-		Resources:         filteredResources,
+		Resources:         filtered,
 		RemovedResources:  toRemove,
 		NextVersionMap:    nextVersionMap,
 		SystemVersionInfo: resources.systemVersion,
