@@ -2,8 +2,9 @@ package cache
 
 import (
 	"fmt"
-	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"time"
+
+	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 )
 
 // Resources is a versioned group of resources.

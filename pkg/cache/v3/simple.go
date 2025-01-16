@@ -268,6 +268,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 				return
 			}
 			// Add new/updated resources to the Resources map
+			snapshot.(*Snapshot).Mu.Lock()
 			index := GetResponseType(typ)
 			currentResources := snapshot.(*Snapshot).Resources[index]
 			currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
@@ -275,6 +276,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			if currentResources.Items == nil {
 				// Batched resource are not state of the world. It is the delta resources.
 				// Only put state of the world items in the resources map.
+				snapshot.(*Snapshot).Mu.Unlock()
 				return
 			}
 
@@ -300,6 +302,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			snapshot.(*Snapshot).Resources[index] = currentResources
 
 			cache.snapshots[cacheIndex] = snapshot
+			snapshot.(*Snapshot).Mu.Unlock()
 
 			// Respond deltas
 			if info := cache.status[cacheIndex]; info != nil {
@@ -346,6 +349,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 	}
 
 	// Add new/updated resources to the Resources map
+	snapshot.(*Snapshot).Mu.Lock()
 	index := GetResponseType(typ)
 	currentResources := snapshot.(*Snapshot).Resources[index]
 	currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
@@ -377,7 +381,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 	// Update
 	snapshot.(*Snapshot).Resources[index] = currentResources
 	cache.snapshots[cacheIndex] = snapshot
-
+	snapshot.(*Snapshot).Mu.Unlock()
 	// Respond deltas
 	if info := cache.status[cacheIndex]; info != nil {
 		info.mu.Lock()

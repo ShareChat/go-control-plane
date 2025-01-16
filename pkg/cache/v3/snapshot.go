@@ -17,6 +17,7 @@ package cache
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
@@ -33,6 +34,8 @@ type Snapshot struct {
 	// instantiated by calling ConstructVersionMap().
 	// VersionMap is only to be used with delta xDS.
 	VersionMap map[string]map[string]string
+
+	Mu sync.RWMutex
 }
 
 var _ ResourceSnapshot = &Snapshot{}
@@ -134,7 +137,16 @@ func (s *Snapshot) GetResourcesAndTTL(typeURL resource.Type) map[string]VTMarsha
 	if typ == types.UnknownType {
 		return nil
 	}
-	return s.Resources[typ].Items
+
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+
+	// create a copy of the items
+	items := make(map[string]VTMarshaledResource, len(s.Resources[typ].Items))
+	for k, v := range s.Resources[typ].Items {
+		items[k] = v
+	}
+	return items
 }
 
 // GetVersion returns the version for a resource type.
@@ -151,7 +163,15 @@ func (s *Snapshot) GetVersion(typeURL resource.Type) string {
 
 // GetVersionMap will return the internal version map of the currently applied snapshot.
 func (s *Snapshot) GetVersionMap(typeURL string) map[string]string {
-	return s.VersionMap[typeURL]
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+
+	// create a copy of the version map
+	versionMap := make(map[string]string, len(s.VersionMap[typeURL]))
+	for k, v := range s.VersionMap[typeURL] {
+		versionMap[k] = v
+	}
+	return versionMap
 }
 
 // ConstructVersionMap will construct a version map based on the current state of a snapshot
@@ -160,11 +180,8 @@ func (s *Snapshot) ConstructVersionMap() error {
 		return fmt.Errorf("missing snapshot")
 	}
 
-	// The snapshot resources never change, so no need to ever rebuild.
-	// With more efficient, updates to snapshot, it may change.
-	//if s.VersionMap != nil {
-	//	return nil
-	//}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
 
 	s.VersionMap = make(map[string]map[string]string)
 
