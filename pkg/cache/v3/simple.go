@@ -320,7 +320,9 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 	}
 	wg.Wait()
 	elapsed := time.Since(start)
-	fmt.Printf("BatchUpsertResources took %s for %d nodes\n", elapsed, size)
+	if elapsed > 50*time.Millisecond {
+		fmt.Printf("BatchUpsertResources took %s for %d nodes\n", elapsed, size)
+	}
 	return nil
 }
 
@@ -594,15 +596,25 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 		for _, k := range info.orderedDeltaWatches {
 			wg.Add(1)
 			watch := info.deltaWatches[k.ID]
+			// One goroutine for each client request awaiting response
 			go func(k key, w DeltaResponseWatch) {
 				defer wg.Done()
+				ctxWithDeadline, cancel := context.WithDeadline(context.TODO(), time.Now().Add(10*time.Millisecond))
+				defer cancel()
+				start := time.Now()
+				// Max 10ms execution time to respond to one client request
 				res, err := cache.respondDelta(
-					ctx,
+					ctxWithDeadline,
 					snapshot,
 					w.Request,
 					w.Response,
 					w.StreamState,
 				)
+				elapsed := time.Since(start)
+				// Log if it takes more than 5ms
+				if elapsed > 5*time.Millisecond {
+					fmt.Printf("respondDelta took %s\n", elapsed)
+				}
 				if err != nil {
 					return
 				}
@@ -618,7 +630,9 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 			delete(info.deltaWatches, id)
 		}
 		elapsed := time.Since(start)
-		fmt.Printf("respondDeltaWatches took %s for %d watches and node %s\n", elapsed, size, info.node.Id)
+		if elapsed > 50*time.Millisecond {
+			fmt.Printf("respondDeltaWatches took %s for %d watches and node %s\n", elapsed, size, info.node.Id)
+		}
 	} else {
 		for id, watch := range info.deltaWatches {
 			res, err := cache.respondDelta(
@@ -897,11 +911,24 @@ func GetEnvoyNodeStr(node *core.Node) string {
 
 // Respond to a delta watch with the provided snapshot value. If the response is nil, there has been no state change.
 func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceSnapshot, request *DeltaRequest, value chan DeltaResponse, state stream.StreamState) (*RawDeltaResponse, error) {
+	// Use snapshot.Mu.RLock() to ensure that the snapshot is not modified while we are reading it.
+	// Previously, we created copy of resources which was less efficient.
+	start := time.Now()
+	snapshot.(*Snapshot).Mu.RLock()
+	elapsedLock := time.Since(start)
+	if elapsedLock > 1*time.Millisecond {
+		fmt.Printf("respondDelta took %s to lock\n", elapsedLock)
+	}
 	resp := createDeltaResponse(ctx, request, state, resourceContainer{
 		resourceMap:   snapshot.GetResourcesAndTTL(request.GetTypeUrl()),
 		versionMap:    snapshot.GetVersionMap(request.GetTypeUrl()),
 		systemVersion: snapshot.GetVersion(request.GetTypeUrl()),
 	})
+	snapshot.(*Snapshot).Mu.RUnlock()
+	elapsed := time.Since(start)
+	if elapsed > 3*time.Millisecond {
+		fmt.Printf("createDeltaResponse took %s\n", elapsed)
+	}
 
 	// Only send a response if there were changes
 	// We want to respond immediately for the first wildcard request in a stream, even if the response is empty

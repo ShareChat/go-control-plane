@@ -138,15 +138,7 @@ func (s *Snapshot) GetResourcesAndTTL(typeURL resource.Type) map[string]VTMarsha
 		return nil
 	}
 
-	s.Mu.RLock()
-	defer s.Mu.RUnlock()
-
-	// create a copy of the items
-	items := make(map[string]VTMarshaledResource, len(s.Resources[typ].Items))
-	for k, v := range s.Resources[typ].Items {
-		items[k] = v
-	}
-	return items
+	return s.Resources[typ].Items
 }
 
 // GetVersion returns the version for a resource type.
@@ -163,15 +155,7 @@ func (s *Snapshot) GetVersion(typeURL resource.Type) string {
 
 // GetVersionMap will return the internal version map of the currently applied snapshot.
 func (s *Snapshot) GetVersionMap(typeURL string) map[string]string {
-	s.Mu.RLock()
-	defer s.Mu.RUnlock()
-
-	// create a copy of the version map
-	versionMap := make(map[string]string, len(s.VersionMap[typeURL]))
-	for k, v := range s.VersionMap[typeURL] {
-		versionMap[k] = v
-	}
-	return versionMap
+	return s.VersionMap[typeURL]
 }
 
 // ConstructVersionMap will construct a version map based on the current state of a snapshot
