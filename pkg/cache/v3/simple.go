@@ -590,7 +590,6 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 	if cache.ads {
 		start := time.Now()
 		info.orderResponseDeltaWatches()
-		size := len(info.orderedDeltaWatches)
 		toDelete := make([]int64, 0)
 		wg := sync.WaitGroup{}
 		for _, k := range info.orderedDeltaWatches {
@@ -599,12 +598,9 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 			// One goroutine for each client request awaiting response
 			go func(k key, w DeltaResponseWatch) {
 				defer wg.Done()
-				ctxWithDeadline, cancel := context.WithDeadline(context.TODO(), time.Now().Add(10*time.Millisecond))
-				defer cancel()
 				start := time.Now()
-				// Max 10ms execution time to respond to one client request
 				res, err := cache.respondDelta(
-					ctxWithDeadline,
+					ctx,
 					snapshot,
 					w.Request,
 					w.Response,
@@ -631,7 +627,7 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 		}
 		elapsed := time.Since(start)
 		if elapsed > 50*time.Millisecond {
-			fmt.Printf("respondDeltaWatches took %s for %d watches and node %s\n", elapsed, size, info.node.Id)
+			fmt.Printf("respondDeltaWatches took %s for %d watches and node %s\n", elapsed, len(toDelete), info.node.Id)
 		}
 	} else {
 		for id, watch := range info.deltaWatches {
