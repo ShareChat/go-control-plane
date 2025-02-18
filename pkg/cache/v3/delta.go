@@ -81,6 +81,8 @@ func createDeltaResponse(ctx context.Context, req *DeltaRequest, state stream.St
 	var filtered []VTMarshaledResource
 	var toRemove []string
 
+	// fmt.Printf("createDeltaResponse: type: %s, wildcard: %v\n", req.TypeUrl, state.IsWildcard())
+
 	// If we are handling a wildcard request, we want to respond with all resources
 	switch {
 	case state.IsWildcard():

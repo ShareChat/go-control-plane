@@ -853,12 +853,14 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 
 	// find the current cache snapshot for the provided node
 	snapshot := cache.snapshots[cacheIndex]
-	exists := snapshot != nil
+	// snapshot exists and we have resources of the typeUrl on the server
+	exists := snapshot != nil && len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0
 
 	// There are three different cases that leads to a delayed watch trigger:
 	// - no snapshot exists for the requested nodeID
 	// - a snapshot exists, but we failed to initialize its version map
 	// - we attempted to issue a response, but the caller is already up to date
+	// fmt.Printf("CreateDeltaWatch: delayedResponse: %v\n", !exists)
 	delayedResponse := !exists
 	if exists {
 		err := snapshot.ConstructVersionMap()
