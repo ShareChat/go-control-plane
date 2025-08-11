@@ -131,6 +131,17 @@ type snapshotCache struct {
 	// mu sync.RWMutex
 }
 
+type RequestContext struct {
+	Ctx       context.Context
+	RequestId string
+	Timestamp time.Time
+	TypeUrl   string
+	Node      *core.Node
+	X         []string
+	Y         map[string]*types.ResourceWithTTL
+	Z         map[string]map[string]*types.ResourceWithTTL
+}
+
 // NewSnapshotCache initializes a simple cache.
 //
 // ADS flag forces a delay in responding to streaming requests until all
@@ -590,13 +601,15 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 	if cache.ads {
 		start := time.Now()
 		info.orderResponseDeltaWatches()
-		toDelete := make([]int64, 0)
+		// Use a buffered channel to safely collect ids to delete from multiple goroutines.
+		toDeleteCh := make(chan int64, len(info.orderedDeltaWatches))
 		wg := sync.WaitGroup{}
 		for _, k := range info.orderedDeltaWatches {
 			wg.Add(1)
 			watch := info.deltaWatches[k.ID]
 			// One goroutine for each client request awaiting response
 			go func(k key, w DeltaResponseWatch) {
+				// This could panic if the client disconnects in middle of this operation
 				defer wg.Done()
 				start := time.Now()
 				res, err := cache.respondDelta(
@@ -617,17 +630,20 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 				// If we detect a nil response here, that means there has been no state change
 				// so we don't want to respond or remove any existing resource watches
 				if res != nil {
-					toDelete = append(toDelete, k.ID)
+					toDeleteCh <- k.ID
 				}
 			}(k, watch)
 		}
 		wg.Wait()
-		for _, id := range toDelete {
+		close(toDeleteCh)
+		deletedCount := 0
+		for id := range toDeleteCh {
 			delete(info.deltaWatches, id)
+			deletedCount++
 		}
 		elapsed := time.Since(start)
 		if elapsed > 50*time.Millisecond {
-			fmt.Printf("respondDeltaWatches took %s for %d watches and node %s\n", elapsed, len(toDelete), info.node.Id)
+			fmt.Printf("respondDeltaWatches took %s for %d watches and node %s\n", elapsed, deletedCount, info.node.Id)
 		}
 	} else {
 		for id, watch := range info.deltaWatches {
