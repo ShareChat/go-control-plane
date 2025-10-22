@@ -563,8 +563,9 @@ func (cache *snapshotCache) respondSOTWWatches(ctx context.Context, info *status
 	// sending them in the correct order. Go's default implementation
 	// of maps are randomized order when ranged over.
 	if cache.ads {
-		info.orderResponseWatches()
-		for _, key := range info.orderedWatches {
+		// Create a local copy of ordered watches to avoid race conditions
+		orderedWatches := info.getOrderedWatches()
+		for _, key := range orderedWatches {
 			err := respond(info.watches[key.ID], key.ID)
 			if err != nil {
 				return err
@@ -600,11 +601,12 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 	// of maps are randomized order when ranged over.
 	if cache.ads {
 		start := time.Now()
-		info.orderResponseDeltaWatches()
+		// Create a local copy of ordered watches to avoid race conditions
+		orderedWatches := info.getOrderedDeltaWatches()
 		// Use a buffered channel to safely collect ids to delete from multiple goroutines.
-		toDeleteCh := make(chan int64, len(info.orderedDeltaWatches))
+		toDeleteCh := make(chan int64, len(orderedWatches))
 		wg := sync.WaitGroup{}
-		for _, k := range info.orderedDeltaWatches {
+		for _, k := range orderedWatches {
 			wg.Add(1)
 			watch := info.deltaWatches[k.ID]
 			// One goroutine for each client request awaiting response

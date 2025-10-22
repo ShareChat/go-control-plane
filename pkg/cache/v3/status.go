@@ -196,6 +196,26 @@ func (info *statusInfo) orderResponseWatches() {
 	sort.Sort(info.orderedWatches)
 }
 
+// getOrderedWatches creates and returns a local copy of ordered watch keys.
+// This avoids race conditions by not using a shared struct field.
+func (info *statusInfo) getOrderedWatches() keys {
+	orderedWatches := make(keys, len(info.watches))
+
+	var index int
+	for id, watch := range info.watches {
+		orderedWatches[index] = key{
+			ID:      id,
+			TypeURL: watch.Request.GetTypeUrl(),
+		}
+		index++
+	}
+
+	// Sort our list which we can use in the SetSnapshot functions.
+	// This is only run when we enable ADS on the cache.
+	sort.Sort(orderedWatches)
+	return orderedWatches
+}
+
 // orderResponseDeltaWatches will track a list of delta watch keys and order them if
 // true is passed.
 func (info *statusInfo) orderResponseDeltaWatches() {
@@ -213,4 +233,24 @@ func (info *statusInfo) orderResponseDeltaWatches() {
 	// Sort our list which we can use in the SetSnapshot functions.
 	// This is only run when we enable ADS on the cache.
 	sort.Sort(info.orderedDeltaWatches)
+}
+
+// getOrderedDeltaWatches creates and returns a local copy of ordered delta watch keys.
+// This avoids race conditions by not using a shared struct field.
+func (info *statusInfo) getOrderedDeltaWatches() keys {
+	orderedWatches := make(keys, len(info.deltaWatches))
+
+	var index int
+	for id, deltaWatch := range info.deltaWatches {
+		orderedWatches[index] = key{
+			ID:      id,
+			TypeURL: deltaWatch.Request.GetTypeUrl(),
+		}
+		index++
+	}
+
+	// Sort our list which we can use in the SetSnapshot functions.
+	// This is only run when we enable ADS on the cache.
+	sort.Sort(orderedWatches)
+	return orderedWatches
 }
