@@ -17,6 +17,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -117,18 +118,32 @@ type snapshotCache struct {
 	// ads flag to hold responses until all resources are named
 	ads bool
 
-	// snapshots are cached resources indexed by node IDs
-	// snapshots map[string]ResourceSnapshot
-	snapshots []ResourceSnapshot
-
-	// status information for all nodes indexed by node IDs
-	// status map[string]*statusInfo
-	status []*statusInfo
+	// shards hold the snapshots and status information for all nodes, keyed by
+	// node ID and striped so that unrelated nodes never contend.
+	//
+	// This replaces a pair of flat 16384-entry slices indexed by
+	// hash.CacheIndexFromKey(nodeID). That layout had two defects. Distinct node
+	// IDs whose hashes collided silently shared one slot, so node A could be
+	// served node B's snapshot — and the shipped IDHash default returns
+	// len(key), which collides *every* node ID of equal length. And because the
+	// cache-wide mutex was commented out, the read-then-create-then-write of a
+	// status slot in CreateDeltaWatch/CreateWatch raced: concurrent first
+	// requests for the same node each installed their own statusInfo and all but
+	// the last were orphaned, permanently invisible to respondDeltaWatches.
+	shards [cacheShards]cacheShard
 
 	// hash is the hashing function for Envoy nodes
 	hash NodeHash
+}
 
-	// mu sync.RWMutex
+// cacheShards is the stripe count. Sharding keeps the concurrency the flat
+// slices were reaching for while keeping map access properly synchronised.
+const cacheShards = 256
+
+type cacheShard struct {
+	mu        sync.RWMutex
+	snapshots map[string]ResourceSnapshot
+	status    map[string]*statusInfo
 }
 
 type RequestContext struct {
@@ -163,15 +178,93 @@ func newSnapshotCache(ads bool, hash NodeHash, logger log.Logger) *snapshotCache
 	}
 
 	cache := &snapshotCache{
-		log: logger,
-		ads: ads,
-		// In compliance with Murmurhash3, 16384 is a good number.
-		snapshots: make([]ResourceSnapshot, 16384),
-		status:    make([]*statusInfo, 16384),
-		hash:      hash,
+		log:  logger,
+		ads:  ads,
+		hash: hash,
+	}
+	for i := range cache.shards {
+		cache.shards[i].snapshots = make(map[string]ResourceSnapshot)
+		cache.shards[i].status = make(map[string]*statusInfo)
 	}
 
 	return cache
+}
+
+// shardFor picks the stripe for a node ID.
+//
+// Deliberately hashed here rather than via hash.CacheIndexFromKey: that is
+// caller-supplied and its shipped default returns len(key), which would pile
+// every same-length node ID into one stripe. Since keys are now real map keys,
+// a poor hash only costs distribution, never correctness.
+func (cache *snapshotCache) shardFor(nodeID string) *cacheShard {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(nodeID))
+	return &cache.shards[h.Sum32()%cacheShards]
+}
+
+// getSnapshot returns the snapshot for a node, or nil when absent.
+func (cache *snapshotCache) getSnapshot(nodeID string) ResourceSnapshot {
+	shard := cache.shardFor(nodeID)
+	shard.mu.RLock()
+	defer shard.mu.RUnlock()
+	return shard.snapshots[nodeID]
+}
+
+// putSnapshot stores the snapshot for a node.
+func (cache *snapshotCache) putSnapshot(nodeID string, snapshot ResourceSnapshot) {
+	shard := cache.shardFor(nodeID)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	shard.snapshots[nodeID] = snapshot
+}
+
+// getStatus returns the status info for a node, or nil when absent.
+func (cache *snapshotCache) getStatus(nodeID string) *statusInfo {
+	shard := cache.shardFor(nodeID)
+	shard.mu.RLock()
+	defer shard.mu.RUnlock()
+	return shard.status[nodeID]
+}
+
+// getOrCreateStatus atomically returns the status info for a node, creating it
+// on first use. Atomicity is the whole point: two concurrent first requests for
+// the same node must observe the SAME statusInfo, or the loser's watches are
+// registered somewhere nothing will ever look at them again.
+func (cache *snapshotCache) getOrCreateStatus(nodeID string, node *core.Node) *statusInfo {
+	shard := cache.shardFor(nodeID)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	if info, ok := shard.status[nodeID]; ok && info != nil {
+		return info
+	}
+	info := newStatusInfo(node)
+	shard.status[nodeID] = info
+	return info
+}
+
+// clearNode drops all snapshot and status state for a node.
+func (cache *snapshotCache) clearNode(nodeID string) {
+	shard := cache.shardFor(nodeID)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	delete(shard.snapshots, nodeID)
+	delete(shard.status, nodeID)
+}
+
+// allStatus returns a snapshot of every known statusInfo. Never contains nils.
+func (cache *snapshotCache) allStatus() []*statusInfo {
+	out := make([]*statusInfo, 0, cacheShards)
+	for i := range cache.shards {
+		shard := &cache.shards[i]
+		shard.mu.RLock()
+		for _, info := range shard.status {
+			if info != nil {
+				out = append(out, info)
+			}
+		}
+		shard.mu.RUnlock()
+	}
+	return out
 }
 
 // NewSnapshotCacheWithHeartbeating initializes a simple cache that sends periodic heartbeat
@@ -197,13 +290,14 @@ func NewSnapshotCacheWithHeartbeating(ctx context.Context, ads bool, hash NodeHa
 		for {
 			select {
 			case <-t.C:
-				// cache.mu.Lock()
-				for _, statusInfo := range cache.status {
-					if statusInfo.node != nil {
-						cache.sendHeartbeats(ctx, statusInfo.node)
+				// status is a sparse slice: all but a handful of the entries are
+				// nil, so the nil check on the element itself is load-bearing.
+				// Without it this panics on the very first tick.
+				for _, info := range cache.allStatus() {
+					if node := info.GetNode(); node != nil {
+						cache.sendHeartbeats(ctx, node)
 					}
 				}
-				// cache.mu.Unlock()
 			case <-ctx.Done():
 				return
 			}
@@ -213,13 +307,13 @@ func NewSnapshotCacheWithHeartbeating(ctx context.Context, ads bool, hash NodeHa
 }
 
 func (cache *snapshotCache) sendHeartbeats(ctx context.Context, node *core.Node) {
-	index := cache.hash.CacheIndex(node)
-	snapshot := cache.snapshots[index]
+	nodeID := cache.hash.ID(node)
+	snapshot := cache.getSnapshot(nodeID)
 	if snapshot == nil {
 		return
 	}
 
-	info := cache.status[index]
+	info := cache.getStatus(nodeID)
 	if info == nil {
 		return
 	}
@@ -271,11 +365,14 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 		wg.Add(1)
 		go func(node string, resourcesUpserted map[string]*types.ResourceWithTTL) {
 			defer wg.Done()
-			cacheIndex := cache.hash.CacheIndexFromKey(node)
-			snapshot := cache.snapshots[cacheIndex]
+			snapshot := cache.getSnapshot(node)
 			if snapshot == nil {
 				// The resources in batch upsert may not be state of the world.
 				// So we don't create a new snapshot to avoid sending anything less than state of the world.
+				//
+				// This silently discards the update. Log it: callers see a nil
+				// error and cannot otherwise tell the push was dropped.
+				cache.log.Warnf("batch upsert dropped for %s: no snapshot yet for node %q", typ, node)
 				return
 			}
 			// Add new/updated resources to the Resources map
@@ -287,7 +384,11 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			if currentResources.Items == nil {
 				// Batched resource are not state of the world. It is the delta resources.
 				// Only put state of the world items in the resources map.
+				//
+				// Note the asymmetry with UpsertResources, which initialises a nil
+				// Items map and proceeds. Here the update is discarded outright.
 				snapshot.(*Snapshot).Mu.Unlock()
+				cache.log.Warnf("batch upsert dropped for %s on node %q: no state-of-the-world items for this type", typ, node)
 				return
 			}
 
@@ -312,11 +413,11 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			// Update
 			snapshot.(*Snapshot).Resources[index] = currentResources
 
-			cache.snapshots[cacheIndex] = snapshot
+			cache.putSnapshot(node, snapshot)
 			snapshot.(*Snapshot).Mu.Unlock()
 
 			// Respond deltas
-			if info := cache.status[cacheIndex]; info != nil {
+			if info := cache.getStatus(node); info != nil {
 				info.mu.Lock()
 
 				// Respond to delta watches for the node.
@@ -339,8 +440,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 
 func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, typ string, resourcesUpserted map[string]*types.ResourceWithTTL) error {
 	start := time.Now()
-	cacheIndex := cache.hash.CacheIndexFromKey(node)
-	snapshot := cache.snapshots[cacheIndex]
+	snapshot := cache.getSnapshot(node)
 	if snapshot == nil {
 		// Snapshot is not found. Create a new snapshot with these new resources.
 		resources := make(map[resource.Type][]types.ResourceWithTTL)
@@ -393,10 +493,10 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 
 	// Update
 	snapshot.(*Snapshot).Resources[index] = currentResources
-	cache.snapshots[cacheIndex] = snapshot
+	cache.putSnapshot(node, snapshot)
 	snapshot.(*Snapshot).Mu.Unlock()
 	// Respond deltas
-	if info := cache.status[cacheIndex]; info != nil {
+	if info := cache.getStatus(node); info != nil {
 		info.mu.Lock()
 		defer info.mu.Unlock()
 
@@ -520,13 +620,11 @@ func (cache *snapshotCache) DrainResources(ctx context.Context, _ string, typ st
 
 // SetSnapshot - updates a snapshot for a node.
 func (cache *snapshotCache) SetSnapshot(ctx context.Context, node string, snapshot ResourceSnapshot) error {
-	cacheIndex := cache.hash.CacheIndexFromKey(node)
-
 	// update the existing entry
-	cache.snapshots[cacheIndex] = snapshot
+	cache.putSnapshot(node, snapshot)
 
 	// trigger existing watches for which version changed
-	if info := cache.status[cacheIndex]; info != nil {
+	if info := cache.getStatus(node); info != nil {
 		info.mu.Lock()
 		defer info.mu.Unlock()
 
@@ -674,8 +772,7 @@ func (cache *snapshotCache) GetSnapshot(node string) (ResourceSnapshot, error) {
 	// cache.mu.RLock()
 	// defer cache.mu.RUnlock()
 
-	cacheIndex := cache.hash.CacheIndexFromKey(node)
-	snap := cache.snapshots[cacheIndex]
+	snap := cache.getSnapshot(node)
 	if snap == nil {
 		return nil, fmt.Errorf("no snapshot found for node %s", node)
 	}
@@ -684,10 +781,7 @@ func (cache *snapshotCache) GetSnapshot(node string) (ResourceSnapshot, error) {
 
 // ClearSnapshot clears snapshot and info for a node.
 func (cache *snapshotCache) ClearSnapshot(node string) {
-	cacheIndex := cache.hash.CacheIndexFromKey(node)
-
-	cache.snapshots[cacheIndex] = nil
-	cache.status[cacheIndex] = nil
+	cache.clearNode(node)
 }
 
 // nameSet creates a map from a string slice to value true.
@@ -717,13 +811,7 @@ func (cache *snapshotCache) CreateWatch(request *Request, streamState stream.Str
 	// cache.mu.Lock()
 	// defer cache.mu.Unlock()
 
-	cacheIndex := cache.hash.CacheIndexFromKey(nodeID)
-
-	info := cache.status[cacheIndex]
-	if info == nil {
-		info = newStatusInfo(request.GetNode())
-		cache.status[cacheIndex] = info
-	}
+	info := cache.getOrCreateStatus(nodeID, request.GetNode())
 
 	// update last watch request time
 	info.mu.Lock()
@@ -731,7 +819,7 @@ func (cache *snapshotCache) CreateWatch(request *Request, streamState stream.Str
 	info.mu.Unlock()
 
 	var version string
-	snapshot := cache.snapshots[cacheIndex]
+	snapshot := cache.getSnapshot(nodeID)
 	if snapshot != nil {
 		version = snapshot.GetVersion(request.GetTypeUrl())
 	}
@@ -764,7 +852,11 @@ func (cache *snapshotCache) CreateWatch(request *Request, streamState stream.Str
 	}
 
 	// if the requested version is up-to-date or missing a response, leave an open watch
-	if snapshot != nil && request.GetVersionInfo() == version {
+	//
+	// The `snapshot != nil &&` form this replaces inverted the no-snapshot case:
+	// instead of leaving a watch open until a snapshot arrives, it fell through
+	// to the respond path below and dereferenced the nil snapshot.
+	if snapshot == nil || request.GetVersionInfo() == version {
 		watchID := cache.nextWatchID()
 		cache.log.Debugf("open watch %d for %s%v from nodeID %q, version %q", watchID, request.GetTypeUrl(), request.GetResourceNames(), nodeID, request.GetVersionInfo())
 		info.mu.Lock()
@@ -791,9 +883,7 @@ func (cache *snapshotCache) nextWatchID() int64 {
 // cancellation function for cleaning stale watches
 func (cache *snapshotCache) cancelWatch(nodeID string, watchID int64) func() {
 	return func() {
-		// uses the cache mutex
-		cacheIndex := cache.hash.CacheIndexFromKey(nodeID)
-		info := cache.status[cacheIndex]
+		info := cache.getStatus(nodeID)
 		if info != nil {
 			info.mu.Lock()
 			delete(info.watches, watchID)
@@ -859,18 +949,13 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// cache.mu.Lock()
 	// defer cache.mu.Unlock()
 
-	cacheIndex := cache.hash.CacheIndexFromKey(nodeID)
-	info := cache.status[cacheIndex]
-	if info == nil {
-		info = newStatusInfo(request.GetNode())
-		cache.status[cacheIndex] = info
-	}
+	info := cache.getOrCreateStatus(nodeID, request.GetNode())
 
 	// update last watch request time
 	info.setLastDeltaWatchRequestTime(time.Now())
 
 	// find the current cache snapshot for the provided node
-	snapshot := cache.snapshots[cacheIndex]
+	snapshot := cache.getSnapshot(nodeID)
 	// snapshot exists and we have resources of the typeUrl on the server
 	exists := snapshot != nil && len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0
 
@@ -878,7 +963,17 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// - no snapshot exists for the requested nodeID
 	// - a snapshot exists, but we failed to initialize its version map
 	// - we attempted to issue a response, but the caller is already up to date
-	// fmt.Printf("CreateDeltaWatch: delayedResponse: %v\n", !exists)
+	//
+	// Deciding "already up to date" and registering the watch must be ONE atomic
+	// step with respect to snapshot updates. respondDeltaWatches runs under
+	// info.mu, so holding info.mu across both halves here makes them mutually
+	// exclusive. Without it there is a window after respondDelta concludes there
+	// is nothing to send and before the watch is registered, during which an
+	// upsert can mutate the snapshot, walk the watches, not find this one, and
+	// silently skip the stream.
+	info.mu.Lock()
+	defer info.mu.Unlock()
+
 	delayedResponse := !exists
 	if exists {
 		err := snapshot.ConstructVersionMap()
@@ -902,7 +997,8 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 			cache.log.Infof("open delta watch ID:%d for %s Resources:%v from nodeID: %q", watchID, t, state.GetSubscribedResourceNames(), nodeID)
 		}
 
-		info.setDeltaResponseWatch(watchID, DeltaResponseWatch{Request: request, Response: value, StreamState: state})
+		// Already holding info.mu, so the locking setter would self-deadlock.
+		info.deltaWatches[watchID] = DeltaResponseWatch{Request: request, Response: value, StreamState: state}
 		return cache.cancelDeltaWatch(nodeID, watchID), delayedResponse
 	}
 
@@ -961,11 +1057,25 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 				fmt.Println("Tried to send on a closed channel")
 			}
 		}()
+		// Non-blocking. Callers hold info.mu across this (respondDeltaWatches
+		// does, and so does CreateDeltaWatch so that "client is up to date" and
+		// "register the watch" are one atomic step). A blocking send under that
+		// lock deadlocks against the stream goroutine, which needs the same lock
+		// to re-register — and ctx is context.Background() at most call sites, so
+		// the ctx.Done() escape hatch never fires.
+		//
+		// Reporting "not responded" on a full channel is safe and self-correcting:
+		// the caller leaves the watch registered, and the next upsert of any type
+		// re-diffs it against the snapshot and delivers the same resources again.
 		select {
 		case value <- resp:
 			return resp, nil
 		case <-ctx.Done():
 			return resp, context.Canceled
+		default:
+			cache.log.Warnf("delta response channel full for node %q type %s; leaving watch open for retry",
+				request.GetNode().GetId(), request.GetTypeUrl())
+			return nil, nil
 		}
 	}
 	return nil, nil
@@ -980,8 +1090,7 @@ func (cache *snapshotCache) cancelDeltaWatch(nodeID string, watchID int64) func(
 	return func() {
 		// cache.mu.RLock()
 		// defer cache.mu.RUnlock()
-		cacheIndex := cache.hash.CacheIndexFromKey(nodeID)
-		info := cache.status[cacheIndex]
+		info := cache.getStatus(nodeID)
 		if info != nil {
 			info.mu.Lock()
 			delete(info.deltaWatches, watchID)
@@ -997,9 +1106,7 @@ func (cache *snapshotCache) Fetch(ctx context.Context, request *Request) (Respon
 
 	// cache.mu.RLock()
 	// defer cache.mu.RUnlock()
-	cacheIndex := cache.hash.CacheIndexFromKey(nodeID)
-
-	if snapshot := cache.snapshots[cacheIndex]; snapshot != nil {
+	if snapshot := cache.getSnapshot(nodeID); snapshot != nil {
 		// Respond only if the request version is distinct from the current snapshot state.
 		// It might be beneficial to hold the request since Envoy will re-attempt the refresh.
 		version := snapshot.GetVersion(request.GetTypeUrl())
@@ -1020,8 +1127,7 @@ func (cache *snapshotCache) Fetch(ctx context.Context, request *Request) (Respon
 func (cache *snapshotCache) GetStatusInfo(node string) StatusInfo {
 	// cache.mu.RLock()
 	// defer cache.mu.RUnlock()
-	cacheIndex := cache.hash.CacheIndexFromKey(node)
-	info := cache.status[cacheIndex]
+	info := cache.getStatus(node)
 	if info == nil {
 		cache.log.Warnf("node does not exist")
 		return nil
@@ -1035,9 +1141,10 @@ func (cache *snapshotCache) GetStatusKeys() []string {
 	// cache.mu.RLock()
 	// defer cache.mu.RUnlock()
 
-	out := make([]string, 0, len(cache.status))
-	for _, statusInfo := range cache.status {
-		if statusInfo != nil {
+	all := cache.allStatus()
+	out := make([]string, 0, len(all))
+	for _, statusInfo := range all {
+		{
 			out = append(out, statusInfo.GetNode().GetId())
 		}
 	}

@@ -170,12 +170,10 @@ func (info *statusInfo) setLastDeltaWatchRequestTime(t time.Time) {
 	info.lastDeltaWatchRequestTime = t
 }
 
-// setDeltaResponseWatch will set the provided delta response watch for the associated watch ID.
-func (info *statusInfo) setDeltaResponseWatch(id int64, drw DeltaResponseWatch) {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	info.deltaWatches[id] = drw
-}
+// Removed: setDeltaResponseWatch. CreateDeltaWatch now holds info.mu across
+// "decide whether the client is up to date" and "register the watch" so the two
+// are atomic against respondDeltaWatches, and a self-locking setter called from
+// under that lock would deadlock. Registration is done inline instead.
 
 // orderResponseWatches will track a list of watch keys and order them if
 // true is passed.

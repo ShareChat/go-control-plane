@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
@@ -34,8 +35,19 @@ const (
 	testType = "google.protobuf.StringValue"
 )
 
+// vtStringValue adapts wrapperspb.StringValue to types.Resource, which this
+// fork widened with MarshalVTStrict. Without the adapter the whole cache/v3
+// test package fails to compile — which is why none of these tests were running.
+type vtStringValue struct {
+	*wrapperspb.StringValue
+}
+
+func (v vtStringValue) MarshalVTStrict() ([]byte, error) {
+	return proto.Marshal(v.StringValue)
+}
+
 func testResource(s string) types.Resource {
-	return wrapperspb.String(s)
+	return vtStringValue{wrapperspb.String(s)}
 }
 
 func verifyResponse(t *testing.T, ch <-chan Response, version string, num int) {
