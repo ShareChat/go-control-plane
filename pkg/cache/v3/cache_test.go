@@ -21,11 +21,15 @@ const (
 )
 
 func TestResponseGetDiscoveryResponse(t *testing.T) {
-	routes := []types.ResourceWithTTL{{Resource: &route.RouteConfiguration{Name: resourceName}}}
+	routes := cache.IndexAndMarshalResourcesByName([]types.ResourceWithTTL{{Resource: &route.RouteConfiguration{Name: resourceName}}})
+	routesVT := make([]cache.VTMarshaledResource, 0, len(routes))
+	for _, r := range routes {
+		routesVT = append(routesVT, r)
+	}
 	resp := cache.RawResponse{
 		Request:   &discovery.DiscoveryRequest{TypeUrl: resource.RouteType},
 		Version:   "v",
-		Resources: routes,
+		Resources: routesVT,
 	}
 
 	discoveryResponse, err := resp.GetDiscoveryResponse()
@@ -70,11 +74,15 @@ func TestPassthroughResponseGetDiscoveryResponse(t *testing.T) {
 }
 
 func TestHeartbeatResponseGetDiscoveryResponse(t *testing.T) {
-	routes := []types.ResourceWithTTL{{Resource: &route.RouteConfiguration{Name: resourceName}}}
+	routes := cache.IndexAndMarshalResourcesByName([]types.ResourceWithTTL{{Resource: &route.RouteConfiguration{Name: resourceName}}})
+	routesVT := make([]cache.VTMarshaledResource, 0, len(routes))
+	for _, r := range routes {
+		routesVT = append(routesVT, r)
+	}
 	resp := cache.RawResponse{
 		Request:   &discovery.DiscoveryRequest{TypeUrl: resource.RouteType},
 		Version:   "v",
-		Resources: routes,
+		Resources: routesVT,
 		Heartbeat: true,
 	}
 

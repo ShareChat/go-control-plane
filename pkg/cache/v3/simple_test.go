@@ -17,6 +17,7 @@ package cache_test
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"reflect"
 	"sync"
 	"testing"
@@ -50,6 +51,19 @@ func (group) ID(node *core.Node) string {
 		return node.GetId()
 	}
 	return key
+}
+
+// CacheIndex / CacheIndexFromKey satisfy the NodeHash interface this fork added.
+// A real hash rather than the shipped IDHash default (which returns len(key) and
+// so collides every node ID of equal length).
+func (g group) CacheIndex(node *core.Node) int {
+	return g.CacheIndexFromKey(g.ID(node))
+}
+
+func (group) CacheIndexFromKey(k string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(k))
+	return int(h.Sum32() % 16384)
 }
 
 var (
@@ -131,7 +145,7 @@ func TestSnapshotCacheWithTTL(t *testing.T) {
 				if gotVersion, _ := out.GetVersion(); gotVersion != fixture.version {
 					t.Errorf("got version %q, want %q", gotVersion, fixture.version)
 				}
-				if !reflect.DeepEqual(cache.IndexResourcesByName(out.(*cache.RawResponse).Resources), snapshotWithTTL.GetResourcesAndTTL(typ)) {
+				if !reflect.DeepEqual(cache.IndexVTResourcesByName(out.(*cache.RawResponse).Resources), snapshotWithTTL.GetResourcesAndTTL(typ)) {
 					t.Errorf("get resources %v, want %v", out.(*cache.RawResponse).Resources, snapshotWithTTL.GetResourcesAndTTL(typ))
 				}
 				// Update streamState
@@ -162,11 +176,11 @@ func TestSnapshotCacheWithTTL(t *testing.T) {
 					if gotVersion, _ := out.GetVersion(); gotVersion != fixture.version {
 						t.Errorf("got version %q, want %q", gotVersion, fixture.version)
 					}
-					if !reflect.DeepEqual(cache.IndexResourcesByName(out.(*cache.RawResponse).Resources), snapshotWithTTL.GetResourcesAndTTL(typ)) {
+					if !reflect.DeepEqual(cache.IndexVTResourcesByName(out.(*cache.RawResponse).Resources), snapshotWithTTL.GetResourcesAndTTL(typ)) {
 						t.Errorf("get resources %v, want %v", out.(*cache.RawResponse).Resources, snapshotWithTTL.GetResources(typ))
 					}
 
-					if !reflect.DeepEqual(cache.IndexResourcesByName(out.(*cache.RawResponse).Resources), snapshotWithTTL.GetResourcesAndTTL(typ)) {
+					if !reflect.DeepEqual(cache.IndexVTResourcesByName(out.(*cache.RawResponse).Resources), snapshotWithTTL.GetResourcesAndTTL(typ)) {
 						t.Errorf("get resources %v, want %v", out.(*cache.RawResponse).Resources, snapshotWithTTL.GetResources(typ))
 					}
 
@@ -235,7 +249,7 @@ func TestSnapshotCache(t *testing.T) {
 				if gotVersion, _ := out.GetVersion(); gotVersion != fixture.version {
 					t.Errorf("got version %q, want %q", gotVersion, fixture.version)
 				}
-				if !reflect.DeepEqual(cache.IndexResourcesByName(out.(*cache.RawResponse).Resources), snapshot.GetResourcesAndTTL(typ)) {
+				if !reflect.DeepEqual(cache.IndexVTResourcesByName(out.(*cache.RawResponse).Resources), snapshot.GetResourcesAndTTL(typ)) {
 					t.Errorf("get resources %v, want %v", out.(*cache.RawResponse).Resources, snapshot.GetResourcesAndTTL(typ))
 				}
 			case <-time.After(time.Second):
@@ -295,7 +309,7 @@ func TestSnapshotCacheWatch(t *testing.T) {
 					t.Errorf("got version %q, want %q", gotVersion, fixture.version)
 				}
 				snapshot := fixture.snapshot()
-				if !reflect.DeepEqual(cache.IndexResourcesByName(out.(*cache.RawResponse).Resources), snapshot.GetResourcesAndTTL(typ)) {
+				if !reflect.DeepEqual(cache.IndexVTResourcesByName(out.(*cache.RawResponse).Resources), snapshot.GetResourcesAndTTL(typ)) {
 					t.Errorf("get resources %v, want %v", out.(*cache.RawResponse).Resources, snapshot.GetResourcesAndTTL(typ))
 				}
 				streamState.SetKnownResourceNamesAsList(typ, out.GetRequest().GetResourceNames())
@@ -331,7 +345,7 @@ func TestSnapshotCacheWatch(t *testing.T) {
 		if gotVersion, _ := out.GetVersion(); gotVersion != fixture.version2 {
 			t.Errorf("got version %q, want %q", gotVersion, fixture.version2)
 		}
-		if !reflect.DeepEqual(cache.IndexResourcesByName(out.(*cache.RawResponse).Resources), snapshot2.Resources[types.Endpoint].Items) {
+		if !reflect.DeepEqual(cache.IndexVTResourcesByName(out.(*cache.RawResponse).Resources), snapshot2.Resources[types.Endpoint].Items) {
 			t.Errorf("got resources %v, want %v", out.(*cache.RawResponse).Resources, snapshot2.Resources[types.Endpoint].Items)
 		}
 	case <-time.After(time.Second):
@@ -459,8 +473,8 @@ func TestSnapshotCreateWatchWithResourcePreviouslyNotRequested(t *testing.T) {
 		if gotVersion, _ := out.GetVersion(); gotVersion != fixture.version {
 			t.Errorf("got version %q, want %q", gotVersion, fixture.version)
 		}
-		want := map[string]types.ResourceWithTTL{clusterName: snapshot2.Resources[types.Endpoint].Items[clusterName]}
-		if !reflect.DeepEqual(cache.IndexResourcesByName(out.(*cache.RawResponse).Resources), want) {
+		want := map[string]cache.VTMarshaledResource{clusterName: snapshot2.Resources[types.Endpoint].Items[clusterName]}
+		if !reflect.DeepEqual(cache.IndexVTResourcesByName(out.(*cache.RawResponse).Resources), want) {
 			t.Errorf("got resources %v, want %v", out.(*cache.RawResponse).Resources, want)
 		}
 	case <-time.After(time.Second):
@@ -482,7 +496,7 @@ func TestSnapshotCreateWatchWithResourcePreviouslyNotRequested(t *testing.T) {
 		if gotVersion, _ := out.GetVersion(); gotVersion != fixture.version {
 			t.Errorf("got version %q, want %q", gotVersion, fixture.version)
 		}
-		if !reflect.DeepEqual(cache.IndexResourcesByName(out.(*cache.RawResponse).Resources), snapshot2.Resources[types.Endpoint].Items) {
+		if !reflect.DeepEqual(cache.IndexVTResourcesByName(out.(*cache.RawResponse).Resources), snapshot2.Resources[types.Endpoint].Items) {
 			t.Errorf("got resources %v, want %v", out.(*cache.RawResponse).Resources, snapshot2.Resources[types.Endpoint].Items)
 		}
 	case <-time.After(time.Second):
@@ -516,6 +530,20 @@ func TestSnapshotClear(t *testing.T) {
 	}
 }
 
+// vtDuration adapts durationpb.Duration to types.Resource, which this fork
+// widened with MarshalVTStrict. Same reason as vtStringValue in linear_test.go.
+type vtDuration struct {
+	*durationpb.Duration
+}
+
+func (v vtDuration) MarshalVTStrict() ([]byte, error) {
+	return proto.Marshal(v.Duration)
+}
+
+func newVTDuration(d time.Duration) types.Resource {
+	return vtDuration{durationpb.New(d)}
+}
+
 type singleResourceSnapshot struct {
 	version  string
 	typeurl  string
@@ -531,24 +559,32 @@ func (s *singleResourceSnapshot) GetVersion(typeURL string) string {
 	return s.version
 }
 
-func (s *singleResourceSnapshot) GetResourcesAndTTL(typeURL string) map[string]types.ResourceWithTTL {
+func (s *singleResourceSnapshot) GetResourcesAndTTL(typeURL string) map[string]cache.VTMarshaledResource {
 	if typeURL != s.typeurl {
 		return nil
 	}
 
 	ttl := time.Second
-	return map[string]types.ResourceWithTTL{
-		s.name: {Resource: s.resource, TTL: &ttl},
+	out, err := s.resource.MarshalVTStrict()
+	if err != nil {
+		return nil
+	}
+	return map[string]cache.VTMarshaledResource{
+		s.name: {Name: s.name, Version: s.version, Resource: out, TTL: &ttl},
 	}
 }
 
-func (s *singleResourceSnapshot) GetResources(typeURL string) map[string]types.Resource {
+func (s *singleResourceSnapshot) GetResources(typeURL string) map[string]cache.VTMarshaledResource {
 	if typeURL != s.typeurl {
 		return nil
 	}
 
-	return map[string]types.Resource{
-		s.name: s.resource,
+	out, err := s.resource.MarshalVTStrict()
+	if err != nil {
+		return nil
+	}
+	return map[string]cache.VTMarshaledResource{
+		s.name: {Name: s.name, Version: s.version, Resource: out},
 	}
 }
 
@@ -571,7 +607,7 @@ func TestSnapshotSingleResourceFetch(t *testing.T) {
 	durationTypeURL := "type.googleapis.com/" + string(proto.MessageName(&durationpb.Duration{}))
 
 	anyDuration := func(d time.Duration) *anypb.Any {
-		bytes, err := cache.MarshalResource(durationpb.New(d))
+		bytes, err := cache.MarshalResource(newVTDuration(d))
 		require.NoError(t, err)
 		return &anypb.Any{
 			TypeUrl: durationTypeURL,
@@ -590,7 +626,7 @@ func TestSnapshotSingleResourceFetch(t *testing.T) {
 		version:  "version-one",
 		typeurl:  durationTypeURL,
 		name:     "one-second",
-		resource: durationpb.New(time.Second),
+		resource: newVTDuration(time.Second),
 	}))
 
 	resp, err := c.Fetch(context.Background(), &discovery.DiscoveryRequest{
@@ -635,7 +671,7 @@ func TestAvertPanicForWatchOnNonExistentSnapshot(t *testing.T) {
 			version:  "version-one",
 			typeurl:  rsrc.RuntimeType,
 			name:     "one-second",
-			resource: durationpb.New(time.Second),
+			resource: newVTDuration(time.Second),
 		}
 		if err := c.SetSnapshot(ctx, "test", srs); err != nil {
 			t.Errorf("unexpected error setting snapshot %v", err)

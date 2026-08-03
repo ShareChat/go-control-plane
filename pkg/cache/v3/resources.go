@@ -59,6 +59,17 @@ func IndexRawResourcesByName(items []types.Resource) map[string]types.Resource {
 	return indexed
 }
 
+// IndexVTResourcesByName creates a map from the resource name to the marshaled
+// resource. This is the pre-marshaled counterpart of IndexResourcesByName, and
+// matches what RawResponse and RawDeltaResponse actually carry in this fork.
+func IndexVTResourcesByName(items []VTMarshaledResource) map[string]VTMarshaledResource {
+	indexed := make(map[string]VTMarshaledResource, len(items))
+	for _, item := range items {
+		indexed[item.Name] = item
+	}
+	return indexed
+}
+
 // NewResources creates a new resource group.
 func NewResources(version string, items []types.Resource) Resources {
 	itemsWithTTL := make([]types.ResourceWithTTL, 0, len(items))
