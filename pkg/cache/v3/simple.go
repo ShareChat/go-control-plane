@@ -395,7 +395,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			for name, r := range resourcesUpserted {
 				out, err := r.Resource.MarshalVTStrict()
 				if err != nil {
-					fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", name, err)
+					reportMarshalError(cache.log, typ, name, err)
 					continue
 				}
 				currentResources.Items[name] = VTMarshaledResource{
@@ -433,7 +433,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 	wg.Wait()
 	elapsed := time.Since(start)
 	if elapsed > 50*time.Millisecond {
-		fmt.Printf("BatchUpsertResources took %s for %d nodes\n", elapsed, size)
+		cache.log.Debugf("BatchUpsertResources took %s for %d nodes", elapsed, size)
 	}
 	return nil
 }
@@ -457,7 +457,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 			return err
 		}
 		elapsed := time.Since(start)
-		fmt.Printf("UpsertResources took %s\n", elapsed)
+		cache.log.Debugf("UpsertResources took %s", elapsed)
 		return nil
 	}
 
@@ -476,7 +476,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 	for name, r := range resourcesUpserted {
 		out, err := r.Resource.MarshalVTStrict()
 		if err != nil {
-			fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", name, err)
+			reportMarshalError(cache.log, typ, name, err)
 			continue
 		}
 		currentResources.Items[name] = VTMarshaledResource{
@@ -722,7 +722,7 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 				elapsed := time.Since(start)
 				// Log if it takes more than 5ms
 				if elapsed > 5*time.Millisecond {
-					fmt.Printf("respondDelta took %s\n", elapsed)
+					cache.log.Debugf("respondDelta took %s", elapsed)
 				}
 				if err != nil {
 					return
@@ -743,7 +743,7 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 		}
 		elapsed := time.Since(start)
 		if elapsed > 50*time.Millisecond {
-			fmt.Printf("respondDeltaWatches took %s for %d watches and node %s\n", elapsed, deletedCount, info.node.Id)
+			cache.log.Debugf("respondDeltaWatches took %s for %d watches and node %s", elapsed, deletedCount, info.node.Id)
 		}
 	} else {
 		for id, watch := range info.deltaWatches {
@@ -1022,14 +1022,14 @@ func GetEnvoyNodeStr(node *core.Node) string {
 }
 
 // Respond to a delta watch with the provided snapshot value. If the response is nil, there has been no state change.
-func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceSnapshot, request *DeltaRequest, value chan DeltaResponse, state stream.StreamState) (*RawDeltaResponse, error) {
+func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceSnapshot, request *DeltaRequest, value chan DeltaResponse, state stream.StreamState) (out *RawDeltaResponse, err error) {
 	// Use snapshot.Mu.RLock() to ensure that the snapshot is not modified while we are reading it.
 	// Previously, we created copy of resources which was less efficient.
 	start := time.Now()
 	snapshot.(*Snapshot).Mu.RLock()
 	elapsedLock := time.Since(start)
 	if elapsedLock > 1*time.Millisecond {
-		fmt.Printf("respondDelta took %s to lock\n", elapsedLock)
+		cache.log.Debugf("respondDelta waited %s for the snapshot read lock", elapsedLock)
 	}
 	resp := createDeltaResponse(ctx, request, state, resourceContainer{
 		resourceMap:   snapshot.GetResourcesAndTTL(request.GetTypeUrl()),
@@ -1039,7 +1039,7 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 	snapshot.(*Snapshot).Mu.RUnlock()
 	elapsed := time.Since(start)
 	if elapsed > 3*time.Millisecond {
-		fmt.Printf("createDeltaResponse took %s\n", elapsed)
+		cache.log.Debugf("createDeltaResponse took %s", elapsed)
 	}
 
 	// Only send a response if there were changes
@@ -1052,9 +1052,16 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
 		}
 
+		// A send on a closed channel panics. Recovering without setting the
+		// return values reported (nil, nil), which both callers read as "no
+		// state change, keep the watch" - so a watch on a dead stream looked
+		// exactly like a healthy idle one. Name the returns and report it.
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Println("Tried to send on a closed channel")
+				out = nil
+				err = ErrResponseChannelClosed
+				cache.log.Errorf("delta response send panicked for node %q type %s: %v; the stream is gone",
+					request.GetNode().GetId(), request.GetTypeUrl(), r)
 			}
 		}()
 		// Non-blocking. Callers hold info.mu across this (respondDeltaWatches

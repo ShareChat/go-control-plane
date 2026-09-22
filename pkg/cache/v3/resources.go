@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
@@ -29,7 +28,9 @@ func IndexAndMarshalResourcesByName(items []types.ResourceWithTTL) map[string]VT
 	for _, item := range items {
 		out, err := item.Resource.MarshalVTStrict()
 		if err != nil {
-			fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", GetResourceName(item.Resource), err)
+			// No logger reaches this free function, so the hook is the only
+			// record that the resource was dropped.
+			reportMarshalError(nil, "", GetResourceName(item.Resource), err)
 			continue
 		}
 		indexed[GetResourceName(item.Resource)] = VTMarshaledResource{
