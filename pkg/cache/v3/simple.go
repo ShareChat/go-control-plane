@@ -1137,16 +1137,30 @@ func (cache *snapshotCache) GetStatusInfo(node string) StatusInfo {
 }
 
 // GetStatusKeys retrieves all node IDs in the status map.
+//
+// These are the keys the status and snapshot maps are actually keyed by -
+// hash.ID(node), as computed in CreateWatch/CreateDeltaWatch and stored by
+// getOrCreateStatus - so a caller can pass any of them straight to
+// GetSnapshot, ClearSnapshot or SetSnapshot.
+//
+// It previously returned statusInfo.GetNode().GetId(), the raw node ID off the
+// stored proto. For a NodeHash that returns node.Id verbatim (IDHash) the two
+// are the same string and nothing was visibly wrong. For any hash that derives
+// a key from more than node.Id - a per-pod or per-shard scheme, say - they
+// differ, and every GetSnapshot made from this list misses: lookups return no
+// snapshot, writes land on a key no watch is registered against, and both fail
+// silently because a missing snapshot is not an error condition on those paths.
 func (cache *snapshotCache) GetStatusKeys() []string {
-	// cache.mu.RLock()
-	// defer cache.mu.RUnlock()
-
-	all := cache.allStatus()
-	out := make([]string, 0, len(all))
-	for _, statusInfo := range all {
-		{
-			out = append(out, statusInfo.GetNode().GetId())
+	out := make([]string, 0, cacheShards)
+	for i := range cache.shards {
+		shard := &cache.shards[i]
+		shard.mu.RLock()
+		for key, info := range shard.status {
+			if info != nil {
+				out = append(out, key)
+			}
 		}
+		shard.mu.RUnlock()
 	}
 
 	return out
