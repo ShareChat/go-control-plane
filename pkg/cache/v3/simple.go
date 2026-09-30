@@ -581,36 +581,38 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 }
 
 func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error {
-	// cache.mu.Lock()
-	// defer cache.mu.Unlock()
+	snapshot := cache.getSnapshot(node)
+	if snapshot == nil {
+		return nil // nothing cached for this node, so nothing to remove
+	}
 
-	// if typ == resource.ClusterType {
-	// 	index := GetResponseType(typ)
-	// 	snapshot := cache.snapshots[node]
-	// 	prevResources := snapshot.(*Snapshot).Resources[index]
-	// 	currentVersion := cache.ParseSystemVersionInfo(prevResources.Version)
+	snapshot.(*Snapshot).Mu.Lock()
+	index := GetResponseType(typ)
+	currentResources := snapshot.(*Snapshot).Resources[index]
+	removed := 0
+	for _, name := range resourcesToDeleted {
+		if _, ok := currentResources.Items[name]; ok {
+			delete(currentResources.Items, name)
+			removed++
+		}
+	}
+	if removed == 0 {
+		snapshot.(*Snapshot).Mu.Unlock()
+		return nil
+	}
+	currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+	currentVersion++
+	currentResources.Version = fmt.Sprintf("%d", currentVersion)
+	snapshot.(*Snapshot).Resources[index] = currentResources
+	cache.putSnapshot(node, snapshot)
+	snapshot.(*Snapshot).Mu.Unlock()
 
-	// 	for _, k := range resourcesToDeleted {
-	// 		delete(prevResources.Items, k)
-	// 	}
-
-	// 	currentVersion++
-	// 	prevResources.Version = fmt.Sprintf("%d", currentVersion)
-	// 	// Update
-	// 	snapshot.(*Snapshot).Resources[index] = prevResources
-	// 	cache.snapshots[node] = snapshot
-
-	// 	// Respond deltas
-	// 	if info, ok := cache.status[node]; ok {
-	// 		info.mu.Lock()
-	// 		defer info.mu.Unlock()
-
-	// 		// Respond to delta watches for the node.
-	// 		return cache.respondDeltaWatches(ctx, info, snapshot)
-	// 	}
-
-	// }
-
+	// VersionMap needs no patching: respondDeltaWatches rebuilds it via ConstructVersionMap.
+	if info := cache.getStatus(node); info != nil {
+		info.mu.Lock()
+		defer info.mu.Unlock()
+		return cache.respondDeltaWatches(ctx, info, snapshot)
+	}
 	return nil
 }
 
