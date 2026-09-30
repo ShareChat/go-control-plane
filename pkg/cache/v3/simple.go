@@ -581,13 +581,16 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 }
 
 func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error {
+	index := GetResponseType(typ)
+	if index == types.UnknownType {
+		return nil
+	}
 	snapshot := cache.getSnapshot(node)
 	if snapshot == nil {
 		return nil // nothing cached for this node, so nothing to remove
 	}
 
 	snapshot.(*Snapshot).Mu.Lock()
-	index := GetResponseType(typ)
 	currentResources := snapshot.(*Snapshot).Resources[index]
 	removed := 0
 	for _, name := range resourcesToDeleted {
@@ -959,7 +962,9 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// find the current cache snapshot for the provided node
 	snapshot := cache.getSnapshot(nodeID)
 	// snapshot exists and we have resources of the typeUrl on the server
-	exists := snapshot != nil && len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0
+	// A client that still holds versions must be answered even when the type is now empty,
+	// otherwise the removal of the last resource is never reported.
+	exists := snapshot != nil && (len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0 || len(state.GetResourceVersions()) > 0)
 
 	// There are three different cases that leads to a delayed watch trigger:
 	// - no snapshot exists for the requested nodeID

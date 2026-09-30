@@ -95,8 +95,39 @@ func TestDeleteResources_NamedSubscriptionNotified(t *testing.T) {
 	}
 }
 
-// Unknown names and nodes without a snapshot are silent no-ops: no error, no version
-// bump, no watch response.
+// Deleting the LAST resource of a type while no watch is parked: a client that then
+// re-subscribes with its old versions must be answered immediately with the removal.
+func TestDeleteResources_LastResourceRemovalOnResubscribe(t *testing.T) {
+	ctx := context.Background()
+	c := cache.NewSnapshotCache(true, group{}, nil)
+	const node = "n1"
+	require.NoError(t, c.UpsertResources(ctx, node, rsrc.ClusterType, map[string]*types.ResourceWithTTL{
+		"b": {Resource: &clusterv3.Cluster{Name: "b"}, Version: "1"},
+	}))
+	req := &cache.DeltaRequest{TypeUrl: rsrc.ClusterType, Node: &core.Node{Id: node}}
+	first := make(chan cache.DeltaResponse, 1)
+	_, delayed := c.CreateDeltaWatch(req, stream.NewStreamState(true, nil), first)
+	require.False(t, delayed)
+	state := stream.NewStreamState(true, nil)
+	state.SetResourceVersions((<-first).GetNextVersionMap())
+
+	require.NoError(t, c.DeleteResources(ctx, node, rsrc.ClusterType, []string{"b"}))
+
+	ch := make(chan cache.DeltaResponse, 1)
+	_, delayed = c.CreateDeltaWatch(req, state, ch)
+	require.False(t, delayed, "removal of the last resource must answer immediately")
+	dr, err := (<-ch).GetDeltaDiscoveryResponse()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b"}, dr.GetRemovedResources())
+
+	// A fresh stream on the now-empty type must still park, not get an empty response.
+	fresh := make(chan cache.DeltaResponse, 1)
+	_, delayed = c.CreateDeltaWatch(req, stream.NewStreamState(true, nil), fresh)
+	assert.True(t, delayed)
+}
+
+// Unknown names, unknown type URLs and nodes without a snapshot are silent no-ops: no
+// error, no version bump, no watch response.
 func TestDeleteResources_NoopCases(t *testing.T) {
 	ctx := context.Background()
 	c := cache.NewSnapshotCache(true, group{}, nil)
@@ -105,11 +136,23 @@ func TestDeleteResources_NoopCases(t *testing.T) {
 	require.NoError(t, c.UpsertResources(ctx, "n1", rsrc.ClusterType, map[string]*types.ResourceWithTTL{
 		"a": {Resource: &clusterv3.Cluster{Name: "a"}, Version: "1"},
 	}))
+	req := &cache.DeltaRequest{TypeUrl: rsrc.ClusterType, Node: &core.Node{Id: "n1"}}
+	first := make(chan cache.DeltaResponse, 1)
+	_, delayed := c.CreateDeltaWatch(req, stream.NewStreamState(true, nil), first)
+	require.False(t, delayed)
+	state := stream.NewStreamState(true, nil)
+	state.SetResourceVersions((<-first).GetNextVersionMap())
+	parked := make(chan cache.DeltaResponse, 1)
+	_, delayed = c.CreateDeltaWatch(req, state, parked)
+	require.True(t, delayed)
+
 	before, err := c.GetSnapshot("n1")
 	require.NoError(t, err)
 	v := before.GetVersion(rsrc.ClusterType)
 	require.NoError(t, c.DeleteResources(ctx, "n1", rsrc.ClusterType, []string{"not-there"}))
+	require.NoError(t, c.DeleteResources(ctx, "n1", "type.googleapis.com/unknown.Type", []string{"a"}))
 	after, err := c.GetSnapshot("n1")
 	require.NoError(t, err)
 	assert.Equal(t, v, after.GetVersion(rsrc.ClusterType))
+	assert.Empty(t, parked, "no-op delete must not answer the parked watch")
 }
