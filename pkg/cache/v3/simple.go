@@ -1038,8 +1038,16 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 	if elapsedLock > 1*time.Millisecond {
 		fmt.Printf("respondDelta took %s to lock\n", elapsedLock)
 	}
+	resourceMap := snapshot.GetResourcesAndTTL(request.GetTypeUrl())
+	// A nil map means the type was never populated (deleting its last resource leaves a
+	// non-nil empty map). Telling a reconnecting client to remove what it holds would drop
+	// it until the type is set; park the watch instead.
+	if resourceMap == nil && len(state.GetResourceVersions()) > 0 {
+		snapshot.(*Snapshot).Mu.RUnlock()
+		return nil, nil
+	}
 	resp := createDeltaResponse(ctx, request, state, resourceContainer{
-		resourceMap:   snapshot.GetResourcesAndTTL(request.GetTypeUrl()),
+		resourceMap:   resourceMap,
 		versionMap:    snapshot.GetVersionMap(request.GetTypeUrl()),
 		systemVersion: snapshot.GetVersion(request.GetTypeUrl()),
 	})

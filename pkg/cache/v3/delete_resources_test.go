@@ -10,6 +10,7 @@ import (
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	rsrc "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
@@ -155,4 +156,61 @@ func TestDeleteResources_NoopCases(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, v, after.GetVersion(rsrc.ClusterType))
 	assert.Empty(t, parked, "no-op delete must not answer the parked watch")
+}
+
+// A restarted control plane builds types one at a time. A client reconnecting with
+// versions for a type the snapshot has never populated must be parked, not told to
+// remove what it holds, even when another type is upserted meanwhile.
+func TestCreateDeltaWatch_NeverPopulatedTypeParksOnResubscribe(t *testing.T) {
+	ctx := context.Background()
+	c := cache.NewSnapshotCache(true, group{}, nil)
+	const node = "n1"
+	require.NoError(t, c.UpsertResources(ctx, node, rsrc.ClusterType, map[string]*types.ResourceWithTTL{
+		"c1": {Resource: &clusterv3.Cluster{Name: "c1"}, Version: "1"},
+	}))
+
+	req := &cache.DeltaRequest{TypeUrl: rsrc.ListenerType, Node: &core.Node{Id: node}, InitialResourceVersions: map[string]string{"L": "v1"}}
+	ch := make(chan cache.DeltaResponse, 1)
+	_, delayed := c.CreateDeltaWatch(req, stream.NewStreamState(true, map[string]string{"L": "v1"}), ch)
+	require.True(t, delayed, "never-populated type must park")
+	require.Empty(t, ch)
+
+	require.NoError(t, c.UpsertResources(ctx, node, rsrc.ClusterType, map[string]*types.ResourceWithTTL{
+		"c2": {Resource: &clusterv3.Cluster{Name: "c2"}, Version: "1"},
+	}))
+	require.Empty(t, ch, "upsert of another type must not answer with a removal")
+
+	require.NoError(t, c.UpsertResources(ctx, node, rsrc.ListenerType, map[string]*types.ResourceWithTTL{
+		"L": {Resource: &listenerv3.Listener{Name: "L"}, Version: "v2"},
+	}))
+	select {
+	case r := <-ch:
+		dr, err := r.GetDeltaDiscoveryResponse()
+		require.NoError(t, err)
+		assert.Empty(t, dr.GetRemovedResources())
+		require.Len(t, dr.GetResources(), 1)
+		assert.Equal(t, "L", dr.GetResources()[0].GetName())
+	default:
+		t.Fatal("parked watch was not answered once the type was set")
+	}
+}
+
+// A type that was populated and emptied by deleting its last resource is a real
+// delete: a reconnecting client holding it must be told to remove it.
+func TestCreateDeltaWatch_EmptiedTypeRemovesOnResubscribe(t *testing.T) {
+	ctx := context.Background()
+	c := cache.NewSnapshotCache(true, group{}, nil)
+	const node = "n1"
+	require.NoError(t, c.UpsertResources(ctx, node, rsrc.ListenerType, map[string]*types.ResourceWithTTL{
+		"L": {Resource: &listenerv3.Listener{Name: "L"}, Version: "v1"},
+	}))
+	require.NoError(t, c.DeleteResources(ctx, node, rsrc.ListenerType, []string{"L"}))
+
+	req := &cache.DeltaRequest{TypeUrl: rsrc.ListenerType, Node: &core.Node{Id: node}, InitialResourceVersions: map[string]string{"L": "v1"}}
+	ch := make(chan cache.DeltaResponse, 1)
+	_, delayed := c.CreateDeltaWatch(req, stream.NewStreamState(true, map[string]string{"L": "v1"}), ch)
+	require.False(t, delayed)
+	dr, err := (<-ch).GetDeltaDiscoveryResponse()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"L"}, dr.GetRemovedResources())
 }
