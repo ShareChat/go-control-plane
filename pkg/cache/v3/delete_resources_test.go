@@ -162,8 +162,16 @@ func TestDeleteResources_NoopCases(t *testing.T) {
 // versions for a type the snapshot has never populated must be parked, not told to
 // remove what it holds, even when another type is upserted meanwhile.
 func TestCreateDeltaWatch_NeverPopulatedTypeParksOnResubscribe(t *testing.T) {
+	testNeverPopulatedTypeParksOnResubscribe(t, true)
+}
+
+func TestCreateDeltaWatch_NeverPopulatedTypeParksOnResubscribeNonADS(t *testing.T) {
+	testNeverPopulatedTypeParksOnResubscribe(t, false)
+}
+
+func testNeverPopulatedTypeParksOnResubscribe(t *testing.T, ads bool) {
 	ctx := context.Background()
-	c := cache.NewSnapshotCache(true, group{}, nil)
+	c := cache.NewSnapshotCache(ads, group{}, nil)
 	const node = "n1"
 	require.NoError(t, c.UpsertResources(ctx, node, rsrc.ClusterType, map[string]*types.ResourceWithTTL{
 		"c1": {Resource: &clusterv3.Cluster{Name: "c1"}, Version: "1"},

@@ -962,8 +962,9 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// find the current cache snapshot for the provided node
 	snapshot := cache.getSnapshot(nodeID)
 	// snapshot exists and we have resources of the typeUrl on the server
-	// A client that still holds versions must be answered even when the type is now empty,
-	// otherwise the removal of the last resource is never reported.
+	// A client that still holds versions must be answered even when the type is now empty
+	// (it was populated and its last resource deleted), otherwise that removal is never
+	// reported. A type never populated is parked by respondDelta instead.
 	exists := snapshot != nil && (len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0 || len(state.GetResourceVersions()) > 0)
 
 	// There are three different cases that leads to a delayed watch trigger:
