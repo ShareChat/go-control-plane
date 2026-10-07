@@ -2,6 +2,8 @@ package cache_test
 
 import (
 	"context"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -258,5 +260,56 @@ func TestDeleteResources_NotifiesParkedSOTWWatch(t *testing.T) {
 		assert.NotEqual(t, version, raw.Version)
 	default:
 		t.Fatal("parked SOTW watch was not notified of the cluster deletion")
+	}
+}
+
+// DeleteResources mutates the snapshot's Items map in place under Snapshot.Mu, so
+// CreateDeltaWatch must hold it to read that map. Meaningful under -race.
+func TestDeleteResources_ConcurrentCreateDeltaWatch(t *testing.T) {
+	ctx := context.Background()
+	c := cache.NewSnapshotCache(true, group{}, nil)
+	const node = "n1"
+	clusters := make(map[string]*types.ResourceWithTTL)
+	for i := 0; i < 100; i++ {
+		name := strconv.Itoa(i)
+		clusters[name] = &types.ResourceWithTTL{Resource: &clusterv3.Cluster{Name: name}, Version: "1"}
+	}
+	require.NoError(t, c.UpsertResources(ctx, node, rsrc.ClusterType, clusters))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for name := range clusters {
+			assert.NoError(t, c.DeleteResources(ctx, node, rsrc.ClusterType, []string{name}))
+		}
+	}()
+	req := &cache.DeltaRequest{TypeUrl: rsrc.ClusterType, Node: &core.Node{Id: node}}
+	for i := 0; i < 100; i++ {
+		if cancel, _ := c.CreateDeltaWatch(req, stream.NewStreamState(true, nil), make(chan cache.DeltaResponse, 1)); cancel != nil {
+			cancel()
+		}
+	}
+	<-done
+}
+
+// An upsert that lands between CreateDeltaWatch reading the snapshot and registering
+// its watch must not leave that watch parked while the snapshot has the data.
+func TestCreateDeltaWatch_ConcurrentUpsertNotMissed(t *testing.T) {
+	ctx := context.Background()
+	req := &cache.DeltaRequest{TypeUrl: rsrc.ClusterType, Node: &core.Node{Id: "n1"}}
+	for i := 0; i < 10000; i++ {
+		c := cache.NewSnapshotCache(true, group{}, nil)
+		ch := make(chan cache.DeltaResponse, 1)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.CreateDeltaWatch(req, stream.NewStreamState(true, nil), ch)
+		}()
+		require.NoError(t, c.UpsertResources(ctx, "n1", rsrc.ClusterType, map[string]*types.ResourceWithTTL{
+			"a": {Resource: &clusterv3.Cluster{Name: "a"}, Version: "1"},
+		}))
+		wg.Wait()
+		require.Len(t, ch, 1, "iteration %d: watch parked although the snapshot has the cluster", i)
 	}
 }

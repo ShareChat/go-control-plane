@@ -962,14 +962,6 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// update last watch request time
 	info.setLastDeltaWatchRequestTime(time.Now())
 
-	// find the current cache snapshot for the provided node
-	snapshot := cache.getSnapshot(nodeID)
-	// snapshot exists and we have resources of the typeUrl on the server
-	// A client that still holds versions must be answered even when the type is now empty
-	// (it was populated and its last resource deleted), otherwise that removal is never
-	// reported. A type never populated is parked by respondDelta instead.
-	exists := snapshot != nil && (len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0 || len(state.GetResourceVersions()) > 0)
-
 	// There are three different cases that leads to a delayed watch trigger:
 	// - no snapshot exists for the requested nodeID
 	// - a snapshot exists, but we failed to initialize its version map
@@ -981,9 +973,23 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// exclusive. Without it there is a window after respondDelta concludes there
 	// is nothing to send and before the watch is registered, during which an
 	// upsert can mutate the snapshot, walk the watches, not find this one, and
-	// silently skip the stream.
+	// silently skip the stream. Reading the snapshot below is part of that step.
 	info.mu.Lock()
 	defer info.mu.Unlock()
+
+	// find the current cache snapshot for the provided node
+	snapshot := cache.getSnapshot(nodeID)
+	// snapshot exists and we have resources of the typeUrl on the server
+	// A client that still holds versions must be answered even when the type is now empty
+	// (it was populated and its last resource deleted), otherwise that removal is never
+	// reported. A type never populated is parked by respondDelta instead.
+	exists := false
+	if snapshot != nil {
+		// UpsertResources and DeleteResources mutate the Items map in place under Mu.
+		snapshot.(*Snapshot).Mu.RLock()
+		exists = len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0 || len(state.GetResourceVersions()) > 0
+		snapshot.(*Snapshot).Mu.RUnlock()
+	}
 
 	delayedResponse := !exists
 	if exists {
