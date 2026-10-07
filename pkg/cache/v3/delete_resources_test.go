@@ -222,3 +222,41 @@ func TestCreateDeltaWatch_EmptiedTypeRemovesOnResubscribe(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"L"}, dr.GetRemovedResources())
 }
+
+// A SOTW CDS client that is up to date parks its watch in the shared cache. Deleting a
+// cluster must send that watch a replacement state-of-the-world without the cluster.
+func TestDeleteResources_NotifiesParkedSOTWWatch(t *testing.T) {
+	ctx := context.Background()
+	c := cache.NewSnapshotCache(true, group{}, nil)
+	const node = "n1"
+	require.NoError(t, c.UpsertResources(ctx, node, rsrc.ClusterType, map[string]*types.ResourceWithTTL{
+		"a": {Resource: &clusterv3.Cluster{Name: "a"}, Version: "1"},
+		"b": {Resource: &clusterv3.Cluster{Name: "b"}, Version: "1"},
+	}))
+	snap, err := c.GetSnapshot(node)
+	require.NoError(t, err)
+	version := snap.GetVersion(rsrc.ClusterType)
+
+	req := &cache.Request{TypeUrl: rsrc.ClusterType, Node: &core.Node{Id: node}, VersionInfo: version}
+	ch := make(chan cache.Response, 1)
+	cancel := c.CreateWatch(req, stream.NewStreamState(true, nil), ch)
+	require.NotNil(t, cancel)
+	defer cancel()
+	require.Empty(t, ch, "up-to-date SOTW request must park")
+
+	require.NoError(t, c.DeleteResources(ctx, node, rsrc.ClusterType, []string{"b"}))
+
+	select {
+	case r := <-ch:
+		raw, ok := r.(*cache.RawResponse)
+		require.True(t, ok)
+		names := make([]string, 0, len(raw.Resources))
+		for _, res := range raw.Resources {
+			names = append(names, res.Name)
+		}
+		assert.Equal(t, []string{"a"}, names)
+		assert.NotEqual(t, version, raw.Version)
+	default:
+		t.Fatal("parked SOTW watch was not notified of the cluster deletion")
+	}
+}

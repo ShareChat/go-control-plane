@@ -614,6 +614,9 @@ func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, ty
 	if info := cache.getStatus(node); info != nil {
 		info.mu.Lock()
 		defer info.mu.Unlock()
+		if err := cache.respondSOTWWatches(ctx, info, snapshot); err != nil {
+			return err
+		}
 		return cache.respondDeltaWatches(ctx, info, snapshot)
 	}
 	return nil
