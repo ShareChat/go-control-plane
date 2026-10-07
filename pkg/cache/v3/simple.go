@@ -16,6 +16,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"strconv"
@@ -760,6 +761,11 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 				watch.Response,
 				watch.StreamState,
 			)
+			if errors.Is(err, ErrResponseChannelClosed) {
+				// The stream is gone: drop its watch, keep answering the node's other watches.
+				delete(info.deltaWatches, id)
+				continue
+			}
 			if err != nil {
 				return err
 			}
