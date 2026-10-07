@@ -320,8 +320,7 @@ func (cache *snapshotCache) sendHeartbeats(ctx context.Context, node *core.Node)
 	info.mu.Lock()
 	for id, watch := range info.watches {
 		// Respond with the current version regardless of whether the version has changed.
-		version := snapshot.GetVersion(watch.Request.GetTypeUrl())
-		resources := snapshot.GetResourcesAndTTL(watch.Request.GetTypeUrl())
+		version, resources := sotwResources(snapshot, watch.Request.GetTypeUrl())
 
 		// TODO(snowp): Construct this once per type instead of once per watch.
 		resourcesWithTTL := map[string]VTMarshaledResource{}
@@ -651,10 +650,9 @@ func (cache *snapshotCache) SetSnapshot(ctx context.Context, node string, snapsh
 func (cache *snapshotCache) respondSOTWWatches(ctx context.Context, info *statusInfo, snapshot ResourceSnapshot) error {
 	// responder callback for SOTW watches
 	respond := func(watch ResponseWatch, id int64) error {
-		version := snapshot.GetVersion(watch.Request.GetTypeUrl())
+		version, resources := sotwResources(snapshot, watch.Request.GetTypeUrl())
 		if version != watch.Request.GetVersionInfo() {
 			cache.log.Debugf("respond open watch %d %s%v with new version %q", id, watch.Request.GetTypeUrl(), watch.Request.GetResourceNames(), version)
-			resources := snapshot.GetResourcesAndTTL(watch.Request.GetTypeUrl())
 			err := cache.respond(ctx, watch.Request, watch.Response, resources, version, false)
 			if err != nil {
 				return err
@@ -827,9 +825,10 @@ func (cache *snapshotCache) CreateWatch(request *Request, streamState stream.Str
 	info.mu.Unlock()
 
 	var version string
+	var resources map[string]VTMarshaledResource
 	snapshot := cache.getSnapshot(nodeID)
 	if snapshot != nil {
-		version = snapshot.GetVersion(request.GetTypeUrl())
+		version, resources = sotwResources(snapshot, request.GetTypeUrl())
 	}
 
 	if snapshot != nil {
@@ -845,7 +844,6 @@ func (cache *snapshotCache) CreateWatch(request *Request, streamState stream.Str
 			request.GetTypeUrl(), request.GetResourceNames(), knownResourceNames, diff)
 
 		if len(diff) > 0 {
-			resources := snapshot.GetResourcesAndTTL(request.GetTypeUrl())
 			for _, name := range diff {
 				if _, exists := resources[name]; exists {
 					if err := cache.respond(context.Background(), request, value, resources, version, false); err != nil {
@@ -874,7 +872,6 @@ func (cache *snapshotCache) CreateWatch(request *Request, streamState stream.Str
 	}
 
 	// otherwise, the watch may be responded immediately
-	resources := snapshot.GetResourcesAndTTL(request.GetTypeUrl())
 	if err := cache.respond(context.Background(), request, value, resources, version, false); err != nil {
 		cache.log.Errorf("failed to send a response for %s%v to nodeID %q: %s", request.GetTypeUrl(),
 			request.GetResourceNames(), nodeID, err)
@@ -898,6 +895,23 @@ func (cache *snapshotCache) cancelWatch(nodeID string, watchID int64) func() {
 			info.mu.Unlock()
 		}
 	}
+}
+
+// sotwResources returns the version and a copy of the resources of typeURL, read under
+// Snapshot.Mu: UpsertResources and DeleteResources mutate a *Snapshot's maps in place, so a
+// SOTW response must not iterate them after the lock is released.
+// ponytail: copies the map on every SOTW read; build the response under the lock if that gets hot.
+func sotwResources(snapshot ResourceSnapshot, typeURL string) (string, map[string]VTMarshaledResource) {
+	if s, ok := snapshot.(*Snapshot); ok {
+		s.Mu.RLock()
+		defer s.Mu.RUnlock()
+	}
+	resources := snapshot.GetResourcesAndTTL(typeURL)
+	out := make(map[string]VTMarshaledResource, len(resources))
+	for name, r := range resources {
+		out[name] = r
+	}
+	return snapshot.GetVersion(typeURL), out
 }
 
 // Respond to a watch with the snapshot value. The value channel should have capacity not to block.
@@ -1134,13 +1148,12 @@ func (cache *snapshotCache) Fetch(ctx context.Context, request *Request) (Respon
 	if snapshot := cache.getSnapshot(nodeID); snapshot != nil {
 		// Respond only if the request version is distinct from the current snapshot state.
 		// It might be beneficial to hold the request since Envoy will re-attempt the refresh.
-		version := snapshot.GetVersion(request.GetTypeUrl())
+		version, resources := sotwResources(snapshot, request.GetTypeUrl())
 		if request.GetVersionInfo() == version {
 			cache.log.Warnf("skip fetch: version up to date")
 			return nil, &types.SkipFetchError{}
 		}
 
-		resources := snapshot.GetResourcesAndTTL(request.GetTypeUrl())
 		out := createResponse(ctx, request, resources, version, false)
 		return out, nil
 	}

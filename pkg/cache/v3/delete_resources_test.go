@@ -313,3 +313,52 @@ func TestCreateDeltaWatch_ConcurrentUpsertNotMissed(t *testing.T) {
 		require.Len(t, ch, 1, "iteration %d: watch parked although the snapshot has the cluster", i)
 	}
 }
+
+// SOTW responses read the snapshot's maps, which UpsertResources and DeleteResources
+// mutate in place under Snapshot.Mu, while a SOTW client keeps re-parking its watch.
+// Meaningful under -race.
+func TestDeleteResources_ConcurrentSOTWWatch(t *testing.T) {
+	ctx := context.Background()
+	c := cache.NewSnapshotCache(true, group{}, nil)
+	const node = "n1"
+	require.NoError(t, c.UpsertResources(ctx, node, rsrc.ClusterType, map[string]*types.ResourceWithTTL{
+		"a": {Resource: &clusterv3.Cluster{Name: "a"}, Version: "1"},
+	}))
+
+	// Two writers, so one's SOTW responses overlap the other's map writes.
+	var wg sync.WaitGroup
+	for _, prefix := range []string{"x", "y"} {
+		wg.Add(1)
+		go func(prefix string) {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				name := prefix + strconv.Itoa(i)
+				assert.NoError(t, c.UpsertResources(ctx, node, rsrc.ClusterType, map[string]*types.ResourceWithTTL{
+					name: {Resource: &clusterv3.Cluster{Name: name}, Version: "1"},
+				}))
+				assert.NoError(t, c.DeleteResources(ctx, node, rsrc.ClusterType, []string{name}))
+			}
+		}(prefix)
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	version := ""
+	for i := 0; i < 200; i++ {
+		ch := make(chan cache.Response, 1)
+		cancel := c.CreateWatch(&cache.Request{TypeUrl: rsrc.ClusterType, Node: &core.Node{Id: node}, VersionInfo: version}, stream.NewStreamState(true, nil), ch)
+		select {
+		case r := <-ch:
+			v, err := r.GetVersion()
+			require.NoError(t, err)
+			version = v
+		case <-done:
+		}
+		if cancel != nil {
+			cancel()
+		}
+	}
+	<-done
+}
