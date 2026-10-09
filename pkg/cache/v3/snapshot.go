@@ -51,7 +51,7 @@ func NewSnapshot(version string, resources map[resource.Type][]types.Resource) (
 			return nil, errors.New("unknown resource type: " + typ)
 		}
 
-		out.Resources[index] = NewResources(version, resource)
+		out.Resources[index] = newResources(version, typ, resource)
 	}
 
 	return &out, nil
@@ -68,7 +68,7 @@ func NewSnapshotWithTTLs(version string, resources map[resource.Type][]types.Res
 			return nil, errors.New("unknown resource type: " + typ)
 		}
 
-		out.Resources[index] = NewResourcesWithTTL(version, resource)
+		out.Resources[index] = Resources{Version: version, Items: indexAndMarshalResourcesByName(typ, resource)}
 	}
 
 	return &out, nil

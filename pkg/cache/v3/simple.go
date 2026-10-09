@@ -920,6 +920,16 @@ func sotwResources(snapshot ResourceSnapshot, typeURL string) (string, map[strin
 	return snapshot.GetVersion(typeURL), out
 }
 
+// readLockSnapshot read-locks a *Snapshot and returns its unlock, as sotwResources does.
+// Other ResourceSnapshot implementations have no Mu and guard themselves, so it is a no-op for them.
+func readLockSnapshot(snapshot ResourceSnapshot) (unlock func()) {
+	if s, ok := snapshot.(*Snapshot); ok {
+		s.Mu.RLock()
+		return s.Mu.RUnlock
+	}
+	return func() {}
+}
+
 // Respond to a watch with the snapshot value. The value channel should have capacity not to block.
 // TODO(kuat) do not respond always, see issue https://github.com/envoyproxy/go-control-plane/issues/46
 func (cache *snapshotCache) respond(ctx context.Context, request *Request, value chan Response, resources map[string]VTMarshaledResource, version string, heartbeat bool) error {
@@ -1006,9 +1016,9 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	exists := false
 	if snapshot != nil {
 		// UpsertResources and DeleteResources mutate the Items map in place under Mu.
-		snapshot.(*Snapshot).Mu.RLock()
+		unlock := readLockSnapshot(snapshot)
 		exists = len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0 || len(state.GetResourceVersions()) > 0
-		snapshot.(*Snapshot).Mu.RUnlock()
+		unlock()
 	}
 
 	delayedResponse := !exists
@@ -1063,7 +1073,7 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 	// Use snapshot.Mu.RLock() to ensure that the snapshot is not modified while we are reading it.
 	// Previously, we created copy of resources which was less efficient.
 	start := time.Now()
-	snapshot.(*Snapshot).Mu.RLock()
+	unlock := readLockSnapshot(snapshot)
 	elapsedLock := time.Since(start)
 	if elapsedLock > 1*time.Millisecond {
 		cache.log.Debugf("respondDelta waited %s for the snapshot read lock", elapsedLock)
@@ -1073,7 +1083,7 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 	// non-nil empty map). Telling a reconnecting client to remove what it holds would drop
 	// it until the type is set; park the watch instead.
 	if resourceMap == nil && len(state.GetResourceVersions()) > 0 {
-		snapshot.(*Snapshot).Mu.RUnlock()
+		unlock()
 		return nil, nil
 	}
 	resp := createDeltaResponse(ctx, request, state, resourceContainer{
@@ -1081,7 +1091,7 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 		versionMap:    snapshot.GetVersionMap(request.GetTypeUrl()),
 		systemVersion: snapshot.GetVersion(request.GetTypeUrl()),
 	})
-	snapshot.(*Snapshot).Mu.RUnlock()
+	unlock()
 	elapsed := time.Since(start)
 	if elapsed > 3*time.Millisecond {
 		cache.log.Debugf("createDeltaResponse took %s", elapsed)

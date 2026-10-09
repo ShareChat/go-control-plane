@@ -680,3 +680,22 @@ func TestAvertPanicForWatchOnNonExistentSnapshot(t *testing.T) {
 
 	<-responder
 }
+
+// customSnapshot is a ResourceSnapshot that is not a *Snapshot. SetSnapshot accepts any
+// implementation, so the delta path must not assert *Snapshot to take its read lock.
+type customSnapshot struct{ cache.ResourceSnapshot }
+
+func TestCreateDeltaWatchCustomSnapshot(t *testing.T) {
+	c := cache.NewSnapshotCache(false, group{}, nil)
+	snap, err := cache.NewSnapshot("1", map[rsrc.Type][]types.Resource{
+		rsrc.EndpointType: {resource.MakeEndpoint(clusterName, 8080)},
+	})
+	require.NoError(t, err)
+	require.NoError(t, c.SetSnapshot(context.Background(), key, customSnapshot{snap}))
+
+	out := make(chan cache.DeltaResponse, 1)
+	req := &cache.DeltaRequest{TypeUrl: rsrc.EndpointType, Node: &core.Node{Id: key}}
+	_, delayed := c.CreateDeltaWatch(req, stream.NewStreamState(true, nil), out)
+	require.False(t, delayed)
+	assert.Len(t, (<-out).(*cache.RawDeltaResponse).Resources, 1)
+}
