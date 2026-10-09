@@ -16,6 +16,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"strconv"
@@ -320,8 +321,7 @@ func (cache *snapshotCache) sendHeartbeats(ctx context.Context, node *core.Node)
 	info.mu.Lock()
 	for id, watch := range info.watches {
 		// Respond with the current version regardless of whether the version has changed.
-		version := snapshot.GetVersion(watch.Request.GetTypeUrl())
-		resources := snapshot.GetResourcesAndTTL(watch.Request.GetTypeUrl())
+		version, resources := sotwResources(snapshot, watch.Request.GetTypeUrl())
 
 		// TODO(snowp): Construct this once per type instead of once per watch.
 		resourcesWithTTL := map[string]VTMarshaledResource{}
@@ -395,7 +395,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 			for name, r := range resourcesUpserted {
 				out, err := r.Resource.MarshalVTStrict()
 				if err != nil {
-					fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", name, err)
+					reportMarshalError(cache.log, typ, name, err)
 					continue
 				}
 				currentResources.Items[name] = VTMarshaledResource{
@@ -433,7 +433,7 @@ func (cache *snapshotCache) BatchUpsertResources(ctx context.Context, typ string
 	wg.Wait()
 	elapsed := time.Since(start)
 	if elapsed > 50*time.Millisecond {
-		fmt.Printf("BatchUpsertResources took %s for %d nodes\n", elapsed, size)
+		cache.log.Debugf("BatchUpsertResources took %s for %d nodes", elapsed, size)
 	}
 	return nil
 }
@@ -457,7 +457,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 			return err
 		}
 		elapsed := time.Since(start)
-		fmt.Printf("UpsertResources took %s\n", elapsed)
+		cache.log.Debugf("UpsertResources took %s", elapsed)
 		return nil
 	}
 
@@ -476,7 +476,7 @@ func (cache *snapshotCache) UpsertResources(ctx context.Context, node string, ty
 	for name, r := range resourcesUpserted {
 		out, err := r.Resource.MarshalVTStrict()
 		if err != nil {
-			fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", name, err)
+			reportMarshalError(cache.log, typ, name, err)
 			continue
 		}
 		currentResources.Items[name] = VTMarshaledResource{
@@ -581,36 +581,44 @@ func (cache *snapshotCache) UpdateVirtualHosts(ctx context.Context, _ string, ty
 }
 
 func (cache *snapshotCache) DeleteResources(ctx context.Context, node string, typ string, resourcesToDeleted []string) error {
-	// cache.mu.Lock()
-	// defer cache.mu.Unlock()
+	index := GetResponseType(typ)
+	if index == types.UnknownType {
+		return nil
+	}
+	snapshot := cache.getSnapshot(node)
+	if snapshot == nil {
+		return nil // nothing cached for this node, so nothing to remove
+	}
 
-	// if typ == resource.ClusterType {
-	// 	index := GetResponseType(typ)
-	// 	snapshot := cache.snapshots[node]
-	// 	prevResources := snapshot.(*Snapshot).Resources[index]
-	// 	currentVersion := cache.ParseSystemVersionInfo(prevResources.Version)
+	snapshot.(*Snapshot).Mu.Lock()
+	currentResources := snapshot.(*Snapshot).Resources[index]
+	removed := 0
+	for _, name := range resourcesToDeleted {
+		if _, ok := currentResources.Items[name]; ok {
+			delete(currentResources.Items, name)
+			removed++
+		}
+	}
+	if removed == 0 {
+		snapshot.(*Snapshot).Mu.Unlock()
+		return nil
+	}
+	currentVersion := cache.ParseSystemVersionInfo(currentResources.Version)
+	currentVersion++
+	currentResources.Version = fmt.Sprintf("%d", currentVersion)
+	snapshot.(*Snapshot).Resources[index] = currentResources
+	cache.putSnapshot(node, snapshot)
+	snapshot.(*Snapshot).Mu.Unlock()
 
-	// 	for _, k := range resourcesToDeleted {
-	// 		delete(prevResources.Items, k)
-	// 	}
-
-	// 	currentVersion++
-	// 	prevResources.Version = fmt.Sprintf("%d", currentVersion)
-	// 	// Update
-	// 	snapshot.(*Snapshot).Resources[index] = prevResources
-	// 	cache.snapshots[node] = snapshot
-
-	// 	// Respond deltas
-	// 	if info, ok := cache.status[node]; ok {
-	// 		info.mu.Lock()
-	// 		defer info.mu.Unlock()
-
-	// 		// Respond to delta watches for the node.
-	// 		return cache.respondDeltaWatches(ctx, info, snapshot)
-	// 	}
-
-	// }
-
+	// VersionMap needs no patching: respondDeltaWatches rebuilds it via ConstructVersionMap.
+	if info := cache.getStatus(node); info != nil {
+		info.mu.Lock()
+		defer info.mu.Unlock()
+		if err := cache.respondSOTWWatches(ctx, info, snapshot); err != nil {
+			return err
+		}
+		return cache.respondDeltaWatches(ctx, info, snapshot)
+	}
 	return nil
 }
 
@@ -643,10 +651,9 @@ func (cache *snapshotCache) SetSnapshot(ctx context.Context, node string, snapsh
 func (cache *snapshotCache) respondSOTWWatches(ctx context.Context, info *statusInfo, snapshot ResourceSnapshot) error {
 	// responder callback for SOTW watches
 	respond := func(watch ResponseWatch, id int64) error {
-		version := snapshot.GetVersion(watch.Request.GetTypeUrl())
+		version, resources := sotwResources(snapshot, watch.Request.GetTypeUrl())
 		if version != watch.Request.GetVersionInfo() {
 			cache.log.Debugf("respond open watch %d %s%v with new version %q", id, watch.Request.GetTypeUrl(), watch.Request.GetResourceNames(), version)
-			resources := snapshot.GetResourcesAndTTL(watch.Request.GetTypeUrl())
 			err := cache.respond(ctx, watch.Request, watch.Response, resources, version, false)
 			if err != nil {
 				return err
@@ -722,7 +729,7 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 				elapsed := time.Since(start)
 				// Log if it takes more than 5ms
 				if elapsed > 5*time.Millisecond {
-					fmt.Printf("respondDelta took %s\n", elapsed)
+					cache.log.Debugf("respondDelta took %s", elapsed)
 				}
 				if err != nil {
 					return
@@ -743,7 +750,7 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 		}
 		elapsed := time.Since(start)
 		if elapsed > 50*time.Millisecond {
-			fmt.Printf("respondDeltaWatches took %s for %d watches and node %s\n", elapsed, deletedCount, info.node.Id)
+			cache.log.Debugf("respondDeltaWatches took %s for %d watches and node %s", elapsed, deletedCount, info.node.Id)
 		}
 	} else {
 		for id, watch := range info.deltaWatches {
@@ -754,6 +761,11 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 				watch.Response,
 				watch.StreamState,
 			)
+			if errors.Is(err, ErrResponseChannelClosed) {
+				// The stream is gone: drop its watch, keep answering the node's other watches.
+				delete(info.deltaWatches, id)
+				continue
+			}
 			if err != nil {
 				return err
 			}
@@ -819,9 +831,10 @@ func (cache *snapshotCache) CreateWatch(request *Request, streamState stream.Str
 	info.mu.Unlock()
 
 	var version string
+	var resources map[string]VTMarshaledResource
 	snapshot := cache.getSnapshot(nodeID)
 	if snapshot != nil {
-		version = snapshot.GetVersion(request.GetTypeUrl())
+		version, resources = sotwResources(snapshot, request.GetTypeUrl())
 	}
 
 	if snapshot != nil {
@@ -837,7 +850,6 @@ func (cache *snapshotCache) CreateWatch(request *Request, streamState stream.Str
 			request.GetTypeUrl(), request.GetResourceNames(), knownResourceNames, diff)
 
 		if len(diff) > 0 {
-			resources := snapshot.GetResourcesAndTTL(request.GetTypeUrl())
 			for _, name := range diff {
 				if _, exists := resources[name]; exists {
 					if err := cache.respond(context.Background(), request, value, resources, version, false); err != nil {
@@ -866,7 +878,6 @@ func (cache *snapshotCache) CreateWatch(request *Request, streamState stream.Str
 	}
 
 	// otherwise, the watch may be responded immediately
-	resources := snapshot.GetResourcesAndTTL(request.GetTypeUrl())
 	if err := cache.respond(context.Background(), request, value, resources, version, false); err != nil {
 		cache.log.Errorf("failed to send a response for %s%v to nodeID %q: %s", request.GetTypeUrl(),
 			request.GetResourceNames(), nodeID, err)
@@ -890,6 +901,33 @@ func (cache *snapshotCache) cancelWatch(nodeID string, watchID int64) func() {
 			info.mu.Unlock()
 		}
 	}
+}
+
+// sotwResources returns the version and a copy of the resources of typeURL, read under
+// Snapshot.Mu: UpsertResources and DeleteResources mutate a *Snapshot's maps in place, so a
+// SOTW response must not iterate them after the lock is released.
+// ponytail: copies the map on every SOTW read; build the response under the lock if that gets hot.
+func sotwResources(snapshot ResourceSnapshot, typeURL string) (string, map[string]VTMarshaledResource) {
+	if s, ok := snapshot.(*Snapshot); ok {
+		s.Mu.RLock()
+		defer s.Mu.RUnlock()
+	}
+	resources := snapshot.GetResourcesAndTTL(typeURL)
+	out := make(map[string]VTMarshaledResource, len(resources))
+	for name, r := range resources {
+		out[name] = r
+	}
+	return snapshot.GetVersion(typeURL), out
+}
+
+// readLockSnapshot read-locks a *Snapshot and returns its unlock, as sotwResources does.
+// Other ResourceSnapshot implementations have no Mu and guard themselves, so it is a no-op for them.
+func readLockSnapshot(snapshot ResourceSnapshot) (unlock func()) {
+	if s, ok := snapshot.(*Snapshot); ok {
+		s.Mu.RLock()
+		return s.Mu.RUnlock
+	}
+	return func() {}
 }
 
 // Respond to a watch with the snapshot value. The value channel should have capacity not to block.
@@ -954,11 +992,6 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// update last watch request time
 	info.setLastDeltaWatchRequestTime(time.Now())
 
-	// find the current cache snapshot for the provided node
-	snapshot := cache.getSnapshot(nodeID)
-	// snapshot exists and we have resources of the typeUrl on the server
-	exists := snapshot != nil && len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0
-
 	// There are three different cases that leads to a delayed watch trigger:
 	// - no snapshot exists for the requested nodeID
 	// - a snapshot exists, but we failed to initialize its version map
@@ -970,9 +1003,23 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// exclusive. Without it there is a window after respondDelta concludes there
 	// is nothing to send and before the watch is registered, during which an
 	// upsert can mutate the snapshot, walk the watches, not find this one, and
-	// silently skip the stream.
+	// silently skip the stream. Reading the snapshot below is part of that step.
 	info.mu.Lock()
 	defer info.mu.Unlock()
+
+	// find the current cache snapshot for the provided node
+	snapshot := cache.getSnapshot(nodeID)
+	// snapshot exists and we have resources of the typeUrl on the server
+	// A client that still holds versions must be answered even when the type is now empty
+	// (it was populated and its last resource deleted), otherwise that removal is never
+	// reported. A type never populated is parked by respondDelta instead.
+	exists := false
+	if snapshot != nil {
+		// UpsertResources and DeleteResources mutate the Items map in place under Mu.
+		unlock := readLockSnapshot(snapshot)
+		exists = len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0 || len(state.GetResourceVersions()) > 0
+		unlock()
+	}
 
 	delayedResponse := !exists
 	if exists {
@@ -1022,24 +1069,32 @@ func GetEnvoyNodeStr(node *core.Node) string {
 }
 
 // Respond to a delta watch with the provided snapshot value. If the response is nil, there has been no state change.
-func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceSnapshot, request *DeltaRequest, value chan DeltaResponse, state stream.StreamState) (*RawDeltaResponse, error) {
+func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceSnapshot, request *DeltaRequest, value chan DeltaResponse, state stream.StreamState) (out *RawDeltaResponse, err error) {
 	// Use snapshot.Mu.RLock() to ensure that the snapshot is not modified while we are reading it.
 	// Previously, we created copy of resources which was less efficient.
 	start := time.Now()
-	snapshot.(*Snapshot).Mu.RLock()
+	unlock := readLockSnapshot(snapshot)
 	elapsedLock := time.Since(start)
 	if elapsedLock > 1*time.Millisecond {
-		fmt.Printf("respondDelta took %s to lock\n", elapsedLock)
+		cache.log.Debugf("respondDelta waited %s for the snapshot read lock", elapsedLock)
+	}
+	resourceMap := snapshot.GetResourcesAndTTL(request.GetTypeUrl())
+	// A nil map means the type was never populated (deleting its last resource leaves a
+	// non-nil empty map). Telling a reconnecting client to remove what it holds would drop
+	// it until the type is set; park the watch instead.
+	if resourceMap == nil && len(state.GetResourceVersions()) > 0 {
+		unlock()
+		return nil, nil
 	}
 	resp := createDeltaResponse(ctx, request, state, resourceContainer{
-		resourceMap:   snapshot.GetResourcesAndTTL(request.GetTypeUrl()),
+		resourceMap:   resourceMap,
 		versionMap:    snapshot.GetVersionMap(request.GetTypeUrl()),
 		systemVersion: snapshot.GetVersion(request.GetTypeUrl()),
 	})
-	snapshot.(*Snapshot).Mu.RUnlock()
+	unlock()
 	elapsed := time.Since(start)
 	if elapsed > 3*time.Millisecond {
-		fmt.Printf("createDeltaResponse took %s\n", elapsed)
+		cache.log.Debugf("createDeltaResponse took %s", elapsed)
 	}
 
 	// Only send a response if there were changes
@@ -1052,9 +1107,16 @@ func (cache *snapshotCache) respondDelta(ctx context.Context, snapshot ResourceS
 				request.GetNode().GetId(), request.GetTypeUrl(), GetResourceWithTTLNames(resp.Resources), resp.RemovedResources, state.IsWildcard())
 		}
 
+		// A send on a closed channel panics. Recovering without setting the
+		// return values reported (nil, nil), which both callers read as "no
+		// state change, keep the watch" - so a watch on a dead stream looked
+		// exactly like a healthy idle one. Name the returns and report it.
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Println("Tried to send on a closed channel")
+				out = nil
+				err = ErrResponseChannelClosed
+				cache.log.Errorf("delta response send panicked for node %q type %s: %v; the stream is gone",
+					request.GetNode().GetId(), request.GetTypeUrl(), r)
 			}
 		}()
 		// Non-blocking. Callers hold info.mu across this (respondDeltaWatches
@@ -1109,13 +1171,12 @@ func (cache *snapshotCache) Fetch(ctx context.Context, request *Request) (Respon
 	if snapshot := cache.getSnapshot(nodeID); snapshot != nil {
 		// Respond only if the request version is distinct from the current snapshot state.
 		// It might be beneficial to hold the request since Envoy will re-attempt the refresh.
-		version := snapshot.GetVersion(request.GetTypeUrl())
+		version, resources := sotwResources(snapshot, request.GetTypeUrl())
 		if request.GetVersionInfo() == version {
 			cache.log.Warnf("skip fetch: version up to date")
 			return nil, &types.SkipFetchError{}
 		}
 
-		resources := snapshot.GetResourcesAndTTL(request.GetTypeUrl())
 		out := createResponse(ctx, request, resources, version, false)
 		return out, nil
 	}

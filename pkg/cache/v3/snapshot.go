@@ -51,7 +51,7 @@ func NewSnapshot(version string, resources map[resource.Type][]types.Resource) (
 			return nil, errors.New("unknown resource type: " + typ)
 		}
 
-		out.Resources[index] = NewResources(version, resource)
+		out.Resources[index] = newResources(version, typ, resource)
 	}
 
 	return &out, nil
@@ -68,7 +68,7 @@ func NewSnapshotWithTTLs(version string, resources map[resource.Type][]types.Res
 			return nil, errors.New("unknown resource type: " + typ)
 		}
 
-		out.Resources[index] = NewResourcesWithTTL(version, resource)
+		out.Resources[index] = Resources{Version: version, Items: indexAndMarshalResourcesByName(typ, resource)}
 	}
 
 	return &out, nil
@@ -180,7 +180,12 @@ func (s *Snapshot) ConstructVersionMap() error {
 
 		for _, r := range resources.Items {
 			if r.Version == "" {
-				return fmt.Errorf("failed to get resource version: %w", err)
+				// err is the already-checked (and nil) GetResponseTypeURL
+				// error, so %w rendered the literal "%!w(<nil>)" and the
+				// actual cause - which resource, of which type - was never
+				// reported. Callers log this and carry on with a partial
+				// VersionMap, so the message is the only clue they get.
+				return fmt.Errorf("resource %q of type %q has no version; cannot build the delta version map", r.Name, typeURL)
 			}
 
 			s.VersionMap[typeURL][r.Name] = r.Version

@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
@@ -25,11 +24,19 @@ type VTMarshaledResource struct {
 
 // IndexAndMarshalResourcesByName creates a map from the resource name to the marshaled resource.
 func IndexAndMarshalResourcesByName(items []types.ResourceWithTTL) map[string]VTMarshaledResource {
+	return indexAndMarshalResourcesByName("", items)
+}
+
+// indexAndMarshalResourcesByName reports a dropped resource under typeURL. types.Resource
+// carries no type URL, so only callers that know it (snapshot construction) can pass one.
+func indexAndMarshalResourcesByName(typeURL string, items []types.ResourceWithTTL) map[string]VTMarshaledResource {
 	indexed := make(map[string]VTMarshaledResource, len(items))
 	for _, item := range items {
 		out, err := item.Resource.MarshalVTStrict()
 		if err != nil {
-			fmt.Printf("failed to MarshalVTStrict resource %s: %v\n", GetResourceName(item.Resource), err)
+			// No logger reaches this free function; reportMarshalError falls back
+			// to the standard logger when no hook is set either.
+			reportMarshalError(nil, typeURL, GetResourceName(item.Resource), err)
 			continue
 		}
 		indexed[GetResourceName(item.Resource)] = VTMarshaledResource{
@@ -72,11 +79,15 @@ func IndexVTResourcesByName(items []VTMarshaledResource) map[string]VTMarshaledR
 
 // NewResources creates a new resource group.
 func NewResources(version string, items []types.Resource) Resources {
+	return newResources(version, "", items)
+}
+
+func newResources(version, typeURL string, items []types.Resource) Resources {
 	itemsWithTTL := make([]types.ResourceWithTTL, 0, len(items))
 	for _, item := range items {
 		itemsWithTTL = append(itemsWithTTL, types.ResourceWithTTL{Resource: item})
 	}
-	return NewResourcesWithTTL(version, itemsWithTTL)
+	return Resources{Version: version, Items: indexAndMarshalResourcesByName(typeURL, itemsWithTTL)}
 }
 
 // NewResourcesWithTTL creates a new resource group.
