@@ -76,11 +76,19 @@ func TestRespondDeltaFullChannelStillReportsNoError(t *testing.T) {
 	}
 }
 
-// Non-ADS: a watch whose stream is gone must not stop delivery to the node's other
-// watches. respondDeltaWatches drops the dead watch and keeps going; before, it
-// returned on ErrResponseChannelClosed, so whichever watches map iteration had not
-// reached yet missed this update.
-func TestRespondDeltaWatchesNonADSSkipsAClosedChannel(t *testing.T) {
+// A watch whose stream is gone must not stop delivery to the node's other watches,
+// and must be dropped, ADS or not. Non-ADS used to return on ErrResponseChannelClosed,
+// so whichever watches map iteration had not reached yet missed this update. ADS kept
+// the dead watch, so every later upsert hit the closed channel again.
+func TestRespondDeltaWatchesSkipsAClosedChannel(t *testing.T) {
+	for _, ads := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non-ADS", true: "ADS"}[ads], func(t *testing.T) {
+			testRespondDeltaWatchesSkipsAClosedChannel(t, ads)
+		})
+	}
+}
+
+func testRespondDeltaWatchesSkipsAClosedChannel(t *testing.T, ads bool) {
 	snapshot, err := NewSnapshotWithTTLs("v1", map[resource.Type][]types.ResourceWithTTL{
 		resource.ClusterType: {{Resource: &cluster.Cluster{Name: "c1"}, Version: "v1"}},
 	})
@@ -88,7 +96,7 @@ func TestRespondDeltaWatchesNonADSSkipsAClosedChannel(t *testing.T) {
 		t.Fatalf("NewSnapshot: %v", err)
 	}
 
-	c := newSnapshotCache(false, IDHash{}, nil)
+	c := newSnapshotCache(ads, IDHash{}, nil)
 	node := &core.Node{Id: "node-1"}
 	info := newStatusInfo(node)
 

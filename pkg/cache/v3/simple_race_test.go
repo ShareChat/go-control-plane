@@ -186,3 +186,50 @@ func (collidingHash) ID(node *core.Node) string {
 }
 func (collidingHash) CacheIndex(*core.Node) int    { return 0 }
 func (collidingHash) CacheIndexFromKey(string) int { return 0 }
+
+// TestCreateDeltaWatchVersionReadIsLocked: when CreateDeltaWatch parks a watch on an
+// existing type, its "open delta watch" log line reads that type's version. Go evaluates
+// the argument even with a no-op logger, and BatchUpsertResources rewrites the version
+// under the snapshot lock, so the read must happen under that lock too. Only -race
+// catches a regression here.
+func TestCreateDeltaWatchVersionReadIsLocked(t *testing.T) {
+	ctx := context.Background()
+	c := cache.NewSnapshotCache(true, cache.IDHash{}, nil)
+	node := &core.Node{Id: sharedNodeID}
+	snap, err := cache.NewSnapshotWithTTLs("1", map[rsrc.Type][]types.ResourceWithTTL{
+		rsrc.ClusterType: {{Resource: testCluster, Version: "v1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetSnapshot(ctx, sharedNodeID, snap); err != nil {
+		t.Fatal(err)
+	}
+
+	const rounds = 500
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			_ = c.BatchUpsertResources(ctx, rsrc.ClusterType, map[string]map[string]*types.ResourceWithTTL{
+				sharedNodeID: {clusterName: {Resource: testCluster, Version: "v1"}},
+			})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			// Not wildcard, nothing subscribed: nothing to send, so the type exists
+			// and the watch is parked, which is the path that logs the version.
+			cancel, _ := c.CreateDeltaWatch(&discovery.DeltaDiscoveryRequest{
+				Node:    node,
+				TypeUrl: rsrc.ClusterType,
+			}, stream.NewStreamState(false, nil), make(chan cache.DeltaResponse, 1))
+			if cancel != nil {
+				cancel()
+			}
+		}
+	}()
+	wg.Wait()
+}

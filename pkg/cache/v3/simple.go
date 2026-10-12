@@ -731,6 +731,11 @@ func (cache *snapshotCache) respondDeltaWatches(ctx context.Context, info *statu
 				if elapsed > 5*time.Millisecond {
 					cache.log.Debugf("respondDelta took %s", elapsed)
 				}
+				if errors.Is(err, ErrResponseChannelClosed) {
+					// The stream is gone: drop its watch, as the non-ADS branch does.
+					toDeleteCh <- k.ID
+					return
+				}
 				if err != nil {
 					return
 				}
@@ -1014,10 +1019,13 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 	// (it was populated and its last resource deleted), otherwise that removal is never
 	// reported. A type never populated is parked by respondDelta instead.
 	exists := false
+	version := ""
 	if snapshot != nil {
-		// UpsertResources and DeleteResources mutate the Items map in place under Mu.
+		// UpsertResources and DeleteResources mutate the Items map in place under Mu, and
+		// BatchUpsertResources rewrites the version, so read both here.
 		unlock := readLockSnapshot(snapshot)
 		exists = len(snapshot.GetResourcesAndTTL(request.GetTypeUrl())) > 0 || len(state.GetResourceVersions()) > 0
+		version = snapshot.GetVersion(t)
 		unlock()
 	}
 
@@ -1039,7 +1047,7 @@ func (cache *snapshotCache) CreateDeltaWatch(request *DeltaRequest, state stream
 		watchID := cache.nextDeltaWatchID()
 
 		if exists {
-			cache.log.Infof("open delta watch ID:%d for %s Resources:%v from nodeID: %q,  version %q", watchID, t, state.GetSubscribedResourceNames(), nodeID, snapshot.GetVersion(t))
+			cache.log.Infof("open delta watch ID:%d for %s Resources:%v from nodeID: %q,  version %q", watchID, t, state.GetSubscribedResourceNames(), nodeID, version)
 		} else {
 			cache.log.Infof("open delta watch ID:%d for %s Resources:%v from nodeID: %q", watchID, t, state.GetSubscribedResourceNames(), nodeID)
 		}
