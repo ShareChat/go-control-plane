@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log"
 	"strings"
@@ -112,5 +113,31 @@ func TestDroppedResourceWithoutHookIsLogged(t *testing.T) {
 
 	if !strings.Contains(buf.String(), `dropping resource "bad"`) {
 		t.Errorf("standard logger got %q, want the dropped resource reported", buf.String())
+	}
+}
+
+// A cache built with no logger gets a no-op default logger. That must not hide an upsert drop
+// either: with no hook it goes to the standard logger.
+func TestUpsertDropWithoutLoggerOrHookIsLogged(t *testing.T) {
+	original := cache.OnResourceMarshalError
+	t.Cleanup(func() { cache.OnResourceMarshalError = original })
+	cache.OnResourceMarshalError = nil
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	c := cache.NewSnapshotCache(false, group{}, nil)
+	ctx := context.Background()
+	good := &types.ResourceWithTTL{Resource: &cluster.Cluster{Name: "good"}}
+	if err := c.UpsertResources(ctx, "n1", resource.ClusterType, map[string]*types.ResourceWithTTL{"good": good}); err != nil {
+		t.Fatal(err)
+	}
+	bad := &types.ResourceWithTTL{Resource: unmarshalableResource{Cluster: &cluster.Cluster{Name: "bad"}}}
+	if err := c.UpsertResources(ctx, "n1", resource.ClusterType, map[string]*types.ResourceWithTTL{"bad": bad}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"bad"`) {
+		t.Errorf("standard logger got %q, want the dropped upsert reported", buf.String())
 	}
 }

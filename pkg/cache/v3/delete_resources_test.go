@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -361,4 +362,39 @@ func TestDeleteResources_ConcurrentSOTWWatch(t *testing.T) {
 		}
 	}
 	<-done
+}
+
+// DeleteResources edits a *Snapshot in place; any other ResourceSnapshot is an error, not a panic.
+func TestDeleteResources_CustomSnapshotIsAnError(t *testing.T) {
+	c := cache.NewSnapshotCache(true, group{}, nil)
+	snap, err := cache.NewSnapshot("1", map[rsrc.Type][]types.Resource{rsrc.ClusterType: {&clusterv3.Cluster{Name: "a"}}})
+	require.NoError(t, err)
+	require.NoError(t, c.SetSnapshot(context.Background(), "n1", customSnapshot{snap}))
+	require.NotPanics(t, func() {
+		assert.Error(t, c.DeleteResources(context.Background(), "n1", rsrc.ClusterType, []string{"a"}))
+	})
+}
+
+// A delete that read the snapshot before ClearSnapshot ran must not write it back: that would
+// resurrect a cleared node.
+func TestDeleteResources_DoesNotResurrectClearedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	c := cache.NewSnapshotCache(true, group{}, nil)
+	require.NoError(t, c.UpsertResources(ctx, "n1", rsrc.ClusterType, map[string]*types.ResourceWithTTL{
+		"a": {Resource: &clusterv3.Cluster{Name: "a"}, Version: "1"},
+	}))
+	snap, err := c.GetSnapshot("n1")
+	require.NoError(t, err)
+
+	// Hold the snapshot lock so the delete stops after reading the snapshot.
+	snap.(*cache.Snapshot).Mu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- c.DeleteResources(ctx, "n1", rsrc.ClusterType, []string{"a"}) }()
+	time.Sleep(20 * time.Millisecond)
+	c.ClearSnapshot("n1")
+	snap.(*cache.Snapshot).Mu.Unlock()
+	require.NoError(t, <-done)
+
+	_, err = c.GetSnapshot("n1")
+	assert.Error(t, err, "DeleteResources resurrected a cleared snapshot")
 }
